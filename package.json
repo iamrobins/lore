@@ -5,6 +5,15 @@
   "version": "0.1.0",
   "license": "MIT",
   "publisher": "iamrobins",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iamrobins/lore.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iamrobins/lore/issues"
+  },
+  "homepage": "https://github.com/iamrobins/lore#readme",
   "engines": {
     "vscode": "^1.85.0"
   },

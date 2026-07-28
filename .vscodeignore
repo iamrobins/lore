@@ -2,7 +2,11 @@ src/**
 out/**
 node_modules/**
 .vscode/**
+.claude/**
 .lore/**
+.gitignore
+.github/**
+*.vsix
 esbuild.mjs
 tsconfig.json
 PLAN.md
