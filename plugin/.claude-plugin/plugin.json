@@ -1,0 +1,7 @@
+{
+  "name": "lore",
+  "version": "0.1.0",
+  "description": "Developer notes stored beside your code, supplied to Claude before it reads or edits a file.",
+  "license": "MIT",
+  "keywords": ["notes", "context", "documentation"]
+}

@@ -8,3 +8,6 @@ tsconfig.json
 PLAN.md
 **/*.map
 **/*.ts
+mcp/**
+plugin/**
+.claude-plugin/**

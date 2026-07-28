@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    // Bundler resolution because esbuild does the resolving: it allows the
+    // extensionless import of ../src/noteStore and top-level await.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noImplicitReturns": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

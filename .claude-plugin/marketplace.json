@@ -1,0 +1,13 @@
+{
+  "name": "lore",
+  "owner": {
+    "name": "Lore"
+  },
+  "plugins": [
+    {
+      "name": "lore",
+      "source": "./plugin",
+      "description": "Developer notes stored beside your code, supplied to Claude before it reads or edits a file."
+    }
+  ]
+}
