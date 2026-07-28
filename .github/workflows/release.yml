@@ -48,7 +48,7 @@ jobs:
           npm run compile:all
           git diff --exit-code || { echo "::error::Build output is stale."; exit 1; }
 
-      - name: Publish lore-mcp to npm
+      - name: Publish @iamrobins/lore-mcp to npm
         if: steps.gate.outputs.release == 'true'
         working-directory: mcp
         env:
@@ -56,8 +56,8 @@ jobs:
         run: |
           VERSION=${{ steps.gate.outputs.version }}
           # Idempotent, so a re-run after a later step failed does not error out.
-          if npm view "lore-mcp@$VERSION" version >/dev/null 2>&1; then
-            echo "lore-mcp@$VERSION is already on npm — skipping."
+          if npm view "@iamrobins/lore-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "@iamrobins/lore-mcp@$VERSION is already on npm — skipping."
           else
             npm publish --access public
           fi

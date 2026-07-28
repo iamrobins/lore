@@ -77,7 +77,7 @@ context, so a workaround stays a workaround instead of being "fixed".
 **Codex, Cursor, Cline, Zed** — anything that speaks MCP:
 
 ```json
-{ "mcpServers": { "lore": { "command": "npx", "args": ["-y", "lore-mcp"] } } }
+{ "mcpServers": { "lore": { "command": "npx", "args": ["-y", "@iamrobins/lore-mcp"] } } }
 ```
 
 Three tools: `lore_read` (a file's notes plus its folders' and the repo's),

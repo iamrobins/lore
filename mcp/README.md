@@ -1,4 +1,4 @@
-# lore-mcp
+# @iamrobins/lore-mcp
 
 Read and write [Lore](https://github.com/iamrobins/lore) notes from any AI coding agent that speaks MCP.
 
@@ -31,7 +31,7 @@ The server reads the repository given as its first argument, falling back to
 **Claude Code**
 
 ```bash
-claude mcp add lore -- npx -y lore-mcp
+claude mcp add lore -- npx -y @iamrobins/lore-mcp
 ```
 
 **Codex** — `~/.codex/config.toml`
@@ -39,7 +39,7 @@ claude mcp add lore -- npx -y lore-mcp
 ```toml
 [mcp_servers.lore]
 command = "npx"
-args = ["-y", "lore-mcp"]
+args = ["-y", "@iamrobins/lore-mcp"]
 ```
 
 **Cursor, Cline, Windsurf, Zed** — `mcp.json`
@@ -47,7 +47,7 @@ args = ["-y", "lore-mcp"]
 ```json
 {
   "mcpServers": {
-    "lore": { "command": "npx", "args": ["-y", "lore-mcp"] }
+    "lore": { "command": "npx", "args": ["-y", "@iamrobins/lore-mcp"] }
   }
 }
 ```
