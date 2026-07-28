@@ -117,4 +117,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=${{ steps.gate.outputs.version }}
-          gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+          # The vsix is attached when the Marketplace step was skipped, so the
+          # manual upload is a download from the release page rather than a dig
+          # through the run's artifacts — and it is provably the same build the
+          # rest of the release came from.
+          if [ -f lore.vsix ]; then
+            mv lore.vsix "lore-$VERSION.vsix"
+            gh release create "v$VERSION" --title "v$VERSION" --generate-notes "lore-$VERSION.vsix"
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+          fi
