@@ -1,5 +1,5 @@
 {
-  "name": "@iamrobins/lore-mcp",
+  "name": "@robinsingh/lore-mcp",
   "version": "0.1.0",
   "description": "Read and write .lore/ notes from any MCP-speaking AI coding agent.",
   "license": "MIT",
