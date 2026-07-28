@@ -35,8 +35,19 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          if [ -z "$NPM_TOKEN" ] || [ -z "$VSCE_PAT" ]; then
-            echo "::notice::NPM_TOKEN and/or VSCE_PAT are not set — skipping release."
+          # The Marketplace is optional. Its credential lives in a different
+          # system from everything else here, and waiting on it would hold up
+          # the two channels that are ready. Without VSCE_PAT the extension is
+          # simply left to be uploaded by hand, as it was for 0.1.0.
+          if [ -n "$VSCE_PAT" ]; then
+            echo "marketplace=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "marketplace=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::VSCE_PAT is not set — publishing npm and tagging, but not the Marketplace. Upload the vsix from the CI artifact."
+          fi
+
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN is not set — skipping release."
             echo "release=false" >> "$GITHUB_OUTPUT"
           elif git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
             echo "::notice::v$VERSION is already tagged — nothing to release."
@@ -73,10 +84,22 @@ jobs:
           fi
 
       - name: Publish the extension to the VS Code Marketplace
-        if: steps.gate.outputs.release == 'true'
+        if: steps.gate.outputs.release == 'true' && steps.gate.outputs.marketplace == 'true'
         run: npx --yes @vscode/vsce publish --pat "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Uploadable by hand from the run's artifacts when the Marketplace step
+      # was skipped, so a release is never blocked on that one credential.
+      - name: Package the extension for manual upload
+        if: steps.gate.outputs.release == 'true' && steps.gate.outputs.marketplace != 'true'
+        run: npx --yes @vscode/vsce package --out lore.vsix
+
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.release == 'true' && steps.gate.outputs.marketplace != 'true'
+        with:
+          name: lore-vsix-v${{ steps.gate.outputs.version }}
+          path: lore.vsix
 
       # The plugin ships as the repository itself, so there is nothing to upload.
       # Tagging is what marks the version as released, and what stops the next
