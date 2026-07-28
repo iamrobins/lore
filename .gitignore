@@ -1,0 +1,18 @@
+# Local only
+PLAN.md
+.claude
+.envs
+
+# Personal notes — never leave this machine
+.lore/local/
+
+# Node
+node_modules/
+out/
+dist/
+*.vsix
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
