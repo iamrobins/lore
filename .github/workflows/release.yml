@@ -19,17 +19,27 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      - name: Has this version already shipped?
+      - name: Should this push release?
         id: gate
+        env:
+          # Secrets are not readable in an `if:` condition, so they are checked
+          # here. A repository without them skips cleanly rather than failing
+          # every push for a reason nobody needs to investigate.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "v$VERSION is already tagged — nothing to release."
+
+          if [ -z "$NPM_TOKEN" ] || [ -z "$VSCE_PAT" ]; then
+            echo "::notice::NPM_TOKEN and/or VSCE_PAT are not set — skipping release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "::notice::v$VERSION is already tagged — nothing to release."
             echo "release=false" >> "$GITHUB_OUTPUT"
           else
             echo "release=true" >> "$GITHUB_OUTPUT"
