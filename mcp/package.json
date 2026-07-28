@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "lore-mcp": "./dist/server.js"
+    "lore-mcp": "dist/server.js"
   },
   "files": [
     "dist",
