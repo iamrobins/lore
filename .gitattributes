@@ -1,0 +1,5 @@
+# The shipped bundles are compared byte-for-byte against a fresh build in CI.
+# Without this, a checkout on Windows rewrites them to CRLF and the check fails
+# for a reason that has nothing to do with the code.
+plugin/dist/hook.js text eol=lf
+mcp/dist/server.js text eol=lf

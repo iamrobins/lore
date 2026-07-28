@@ -159,7 +159,8 @@
     "vscode:prepublish": "npm run compile",
     "compile:mcp": "node mcp/build.mjs",
     "compile:plugin": "node plugin/build.mjs",
-    "compile:all": "npm run compile && npm run compile:mcp && npm run compile:plugin"
+    "compile:all": "npm run version:sync && npm run compile && npm run compile:mcp && npm run compile:plugin",
+    "version:sync": "node scripts/sync-version.mjs"
   },
   "dependencies": {
     "gray-matter": "^4.0.3"

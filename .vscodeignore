@@ -15,3 +15,6 @@ PLAN.md
 mcp/**
 plugin/**
 .claude-plugin/**
+scripts/**
+.gitattributes
+spec/**

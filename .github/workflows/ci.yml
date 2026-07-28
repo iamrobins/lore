@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm ci --prefix mcp
+
+      - name: Test and typecheck all three packages
+        run: npm test
+
+      # plugin/dist and mcp/dist are committed, because a plugin install clones
+      # the repository and runs what it finds with no build step. Nothing
+      # rebuilds them automatically, so a source change pushed without a rebuild
+      # ships the old behaviour with no error anywhere. This is that guard.
+      - name: Rebuild everything that ships
+        run: npm run compile:all
+
+      - name: Committed bundles and versions must match the source
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::Committed build output is stale. Run 'npm run compile:all' and commit the result."
+            exit 1
+          fi
+
+      - name: Package the extension
+        run: npx --yes @vscode/vsce package --out lore.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lore-vsix
+          path: lore.vsix

@@ -1,0 +1,87 @@
+name: Release
+
+# Merging to main publishes every channel — but only when the version in the
+# root package.json has changed. The git tag is the record of what has already
+# shipped, so a push that does not bump the version is a no-op, and a re-run
+# after a partial failure resumes rather than duplicating.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Has this version already shipped?
+        id: gate
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION is already tagged — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm ci
+        if: steps.gate.outputs.release == 'true'
+      - run: npm ci --prefix mcp
+        if: steps.gate.outputs.release == 'true'
+
+      # Belt and braces: CI already checks this, but publishing a stale bundle
+      # is not something to find out about afterwards.
+      - name: Rebuild and verify nothing is stale
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          npm run compile:all
+          git diff --exit-code || { echo "::error::Build output is stale."; exit 1; }
+
+      - name: Publish lore-mcp to npm
+        if: steps.gate.outputs.release == 'true'
+        working-directory: mcp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION=${{ steps.gate.outputs.version }}
+          # Idempotent, so a re-run after a later step failed does not error out.
+          if npm view "lore-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "lore-mcp@$VERSION is already on npm — skipping."
+          else
+            npm publish --access public
+          fi
+
+      - name: Publish the extension to the VS Code Marketplace
+        if: steps.gate.outputs.release == 'true'
+        run: npx --yes @vscode/vsce publish --pat "$VSCE_PAT"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # The plugin ships as the repository itself, so there is nothing to upload.
+      # Tagging is what marks the version as released, and what stops the next
+      # push to main from publishing it again.
+      - name: Tag the release
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          VERSION=${{ steps.gate.outputs.version }}
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Create the GitHub release
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${{ steps.gate.outputs.version }}
+          gh release create "v$VERSION" --title "v$VERSION" --generate-notes

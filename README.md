@@ -108,7 +108,8 @@ Remove only after ticket #841.
 `path` can be a file, a folder (`src/api/`), or `.` for the whole repository.
 Folder notes apply to everything beneath them.
 
-The format is specified in **[spec/lore-format.md](spec/lore-format.md)** — it is
+The format is specified in
+**[spec/lore-format.md](https://github.com/iamrobins/lore/blob/main/spec/lore-format.md)** — it is
 the authority, and this extension is one implementation of it. If you want to
 read or write Lore notes from another editor, a CLI, or CI, that document is all
 you need.
