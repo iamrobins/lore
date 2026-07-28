@@ -118,9 +118,12 @@ you need.
 
 | | |
 |---|---|
-| `Alt+N` | New note on the line under the cursor |
+| `Alt+N` — macOS `⌘⌥N` | New note on the line under the cursor |
 | Sidebar **+** | Same thing |
 | Right-click a note | Open, re-attach, share with team, make personal |
+
+macOS differs because `⌥N` is a dead key there — it composes `ñ` rather than
+reaching the editor.
 
 ## Status
 

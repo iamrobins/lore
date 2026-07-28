@@ -1,6 +1,6 @@
 {
   "name": "lore",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Developer notes stored beside your code, supplied to Claude before it reads or edits a file.",
   "license": "MIT",
   "keywords": [
