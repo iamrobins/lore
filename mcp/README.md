@@ -90,6 +90,9 @@ Remove only after ticket #841.
 A note's scope is the directory it lives in: `.lore/local/` is personal and
 gitignored, `.lore/notes/` is shared and committed.
 
+Full specification:
+[spec/lore-format.md](https://github.com/iamrobins/lore/blob/main/spec/lore-format.md).
+
 ## Development
 
 ```bash
