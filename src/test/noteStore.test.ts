@@ -9,11 +9,13 @@ import {
   findSnippetLine,
   findSymbolLine,
   moveNoteToScope,
+  notesApplyingTo,
   notesForDirectory,
   notesForFile,
   parseNote,
   readAllNotes,
   resolveNoteLine,
+  searchNotes,
   serializeNote,
   toNoteFileName,
   workspaceNotes,
@@ -127,6 +129,48 @@ test('notesForFile matches one file and never folder notes', () => {
     ['src/payment/service.py'],
   );
   assert.deepEqual(notesForFile(notes, 'src/payment'), []);
+});
+
+test('notesApplyingTo gathers repo, folder and file notes, broadest first', () => {
+  const notes = [
+    noteFor('src/payment/service.py'),
+    noteFor('src/payment/'),
+    noteFor('src/'),
+    noteFor('.'),
+    noteFor('src/auth/login.py'),
+    noteFor('src/auth/'),
+  ];
+
+  assert.deepEqual(
+    notesApplyingTo(notes, 'src/payment/service.py').map((note) => note.targetPath),
+    ['.', 'src/', 'src/payment/', 'src/payment/service.py'],
+  );
+});
+
+test('notesApplyingTo returns repo-wide notes for a file at the root', () => {
+  const notes = [noteFor('.'), noteFor('calc.py'), noteFor('src/')];
+
+  assert.deepEqual(
+    notesApplyingTo(notes, 'calc.py').map((note) => note.targetPath),
+    ['.', 'calc.py'],
+  );
+});
+
+test('searchNotes matches title, body, path and symbol, case-insensitively', () => {
+  const notes = [
+    { ...noteFor('src/payment/service.py'), title: 'Retry loop', body: 'Stripe times out' },
+    { ...noteFor('src/auth/login.py'), title: 'PKCE', body: 'Legacy clients', symbol: 'AuthService.login' },
+    { ...noteFor('src/cache.py'), title: 'Redis', body: 'Evict daily' },
+  ];
+
+  assert.deepEqual(searchNotes(notes, 'stripe').map((note) => note.title), ['Retry loop']);
+  assert.deepEqual(searchNotes(notes, 'AUTHSERVICE').map((note) => note.title), ['PKCE']);
+  assert.deepEqual(searchNotes(notes, 'payment').map((note) => note.title), ['Retry loop']);
+  assert.deepEqual(searchNotes(notes, 'redis').map((note) => note.title), ['Redis']);
+});
+
+test('searchNotes returns nothing for an empty query rather than everything', () => {
+  assert.deepEqual(searchNotes([noteFor('a.py')], '   '), []);
 });
 
 test('resolveNoteLine converts a 1-indexed note line to a 0-indexed editor line', () => {

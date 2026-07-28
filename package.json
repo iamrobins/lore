@@ -123,9 +123,10 @@
   "scripts": {
     "compile": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "check": "tsc",
+    "check": "tsc && tsc -p mcp",
     "test": "npm run check && node --test \"out/**/*.test.js\"",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "compile:mcp": "node mcp/build.mjs"
   },
   "dependencies": {
     "gray-matter": "^4.0.3"

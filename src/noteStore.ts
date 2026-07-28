@@ -270,6 +270,37 @@ export function workspaceNotes(notes: Note[]): Note[] {
   return notes.filter(isDirectoryNote);
 }
 
+/**
+ * Every note bearing on a file: its own, plus each ancestor folder's, plus the
+ * repository-wide ones. Ordered broadest first, so a reader meets the general
+ * rules before the specific exception to them.
+ *
+ * This is what an agent needs before touching a file — a `.lore/notes/api.md`
+ * saying "never change these response shapes" applies to every file under
+ * `src/api/`, not only to the one it was written against.
+ */
+export function notesApplyingTo(notes: Note[], targetPath: string): Note[] {
+  const target = toPosixPath(targetPath);
+  const segments = target.split('/');
+
+  // '.', then 'src/', 'src/api/', … then the file itself.
+  const scopes = ['.', ...segments.slice(0, -1).map((_, index) => `${segments.slice(0, index + 1).join('/')}/`), target];
+
+  return scopes.flatMap((scope) => notes.filter((note) => note.targetPath === scope));
+}
+
+/** Case-insensitive substring match over the parts of a note worth searching. */
+export function searchNotes(notes: Note[], query: string): Note[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [];
+
+  return notes.filter((note) =>
+    [note.title, note.body, note.targetPath, note.symbol ?? ''].some((field) =>
+      field.toLowerCase().includes(needle),
+    ),
+  );
+}
+
 function parentDirectoryOf(targetPath: string): string {
   const segments = toPosixPath(targetPath).split('/');
   return segments.slice(0, -1).join('/');

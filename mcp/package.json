@@ -1,0 +1,42 @@
+{
+  "name": "@lore/mcp",
+  "version": "0.1.0",
+  "description": "Read and write .lore/ notes from any MCP-speaking AI coding agent.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "lore-mcp": "./dist/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "lore",
+    "notes",
+    "ai"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc -p .",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "gray-matter": "^4.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "esbuild@0.23.1": true
+  }
+}
