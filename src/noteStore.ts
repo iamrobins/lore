@@ -207,10 +207,12 @@ export async function ensureLocalIgnored(workspaceRoot: string): Promise<void> {
     .some((line) => line.trim().replace(/\/+$/, '') === '.lore/local');
   if (alreadyIgnored) return;
 
-  const leadingNewline = existing === '' || existing.endsWith('\n') ? '' : '\n';
+  // Blank line to separate us from existing rules, but not at the top of a
+  // .gitignore we are creating from scratch.
+  const separator = existing === '' ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
   await fs.appendFile(
     gitignorePath,
-    `${leadingNewline}\n# Lore personal notes — never committed\n${LOCAL_IGNORE_ENTRY}\n`,
+    `${separator}# Lore personal notes — never committed\n${LOCAL_IGNORE_ENTRY}\n`,
     'utf8',
   );
 }
@@ -231,6 +233,12 @@ export function notesForDirectory(notes: Note[], directoryPath: string): Note[] 
     if (isDirectoryNote(note)) return false;
     return parentDirectoryOf(note.targetPath) === directory;
   });
+}
+
+/** Notes attached to one specific file (workspace-relative path). */
+export function notesForFile(notes: Note[], targetPath: string): Note[] {
+  const target = toPosixPath(targetPath);
+  return notes.filter((note) => !isDirectoryNote(note) && note.targetPath === target);
 }
 
 /** Folder- and repo-scoped notes, which belong in their own sidebar group. */
@@ -277,4 +285,20 @@ export function findSnippetLine(
 
   // Moved further than the radius — fall back to scanning the whole file.
   return lines.findIndex((line) => line.trim() === target);
+}
+
+/**
+ * The 0-indexed line a note points at in the given text, or undefined when its
+ * anchor is lost.
+ *
+ * A note whose snippet has disappeared returns undefined rather than its stale
+ * line number: a pin sitting next to unrelated code is worse than no pin, and
+ * the sidebar still lists the note either way.
+ */
+export function resolveNoteLine(note: Note, documentText: string): number | undefined {
+  if (note.snippet) {
+    const foundLine = findSnippetLine(documentText, note.snippet, note.line);
+    return foundLine >= 0 ? foundLine : undefined;
+  }
+  return note.line === undefined ? undefined : note.line - 1;
 }

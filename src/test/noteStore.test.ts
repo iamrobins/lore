@@ -8,8 +8,10 @@ import {
   ensureLocalIgnored,
   findSnippetLine,
   notesForDirectory,
+  notesForFile,
   parseNote,
   readAllNotes,
+  resolveNoteLine,
   serializeNote,
   toNoteFileName,
   workspaceNotes,
@@ -115,6 +117,35 @@ test('notesForDirectory matches only the files directly in that directory', () =
   );
 });
 
+test('notesForFile matches one file and never folder notes', () => {
+  const notes = [noteFor('src/payment/service.py'), noteFor('src/payment/'), noteFor('src/auth/login.py')];
+
+  assert.deepEqual(
+    notesForFile(notes, 'src/payment/service.py').map((note) => note.targetPath),
+    ['src/payment/service.py'],
+  );
+  assert.deepEqual(notesForFile(notes, 'src/payment'), []);
+});
+
+test('resolveNoteLine converts a 1-indexed note line to a 0-indexed editor line', () => {
+  const note = { ...noteFor('src/a.py'), line: 3 };
+  assert.equal(resolveNoteLine(note, 'a\nb\nc\nd'), 2);
+});
+
+test('resolveNoteLine follows the snippet rather than the stored line', () => {
+  const note = { ...noteFor('src/a.py'), line: 1, snippet: 'return a / b' };
+  assert.equal(resolveNoteLine(note, 'x\ny\nreturn a / b\nz'), 2);
+});
+
+test('resolveNoteLine gives up when the snippet is gone, so no pin is drawn', () => {
+  const note = { ...noteFor('src/a.py'), line: 2, snippet: 'return a / b' };
+  assert.equal(resolveNoteLine(note, 'x\ny\nz'), undefined);
+});
+
+test('resolveNoteLine gives up on a note with neither snippet nor line', () => {
+  assert.equal(resolveNoteLine(noteFor('src/a.py'), 'x\ny'), undefined);
+});
+
 test('readAllNotes takes scope from the directory and ignores broken notes', async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lore-test-'));
 
@@ -156,6 +187,29 @@ test('ensureLocalIgnored adds the rule once and never duplicates it', async () =
   const occurrences = contents.split('\n').filter((line) => line.trim() === '.lore/local/').length;
   assert.equal(occurrences, 1);
   assert.match(contents, /^node_modules\/$/m);
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+});
+
+test('ensureLocalIgnored creates a .gitignore that does not start with a blank line', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lore-test-'));
+
+  await ensureLocalIgnored(workspaceRoot);
+
+  const contents = await fs.readFile(path.join(workspaceRoot, '.gitignore'), 'utf8');
+  assert.equal(contents, '# Lore personal notes — never committed\n.lore/local/\n');
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+});
+
+test('ensureLocalIgnored leaves one blank line between existing rules and ours', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lore-test-'));
+  await fs.writeFile(path.join(workspaceRoot, '.gitignore'), '__pycache__/\n');
+
+  await ensureLocalIgnored(workspaceRoot);
+
+  const contents = await fs.readFile(path.join(workspaceRoot, '.gitignore'), 'utf8');
+  assert.equal(contents, '__pycache__/\n\n# Lore personal notes — never committed\n.lore/local/\n');
 
   await fs.rm(workspaceRoot, { recursive: true, force: true });
 });

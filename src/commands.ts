@@ -8,10 +8,10 @@ import * as vscode from 'vscode';
 import {
   Note,
   ensureLocalIgnored,
-  findSnippetLine,
   isDirectoryNote,
   listNoteFileNames,
   notesDirectory,
+  resolveNoteLine,
   toNoteFileName,
   toPosixPath,
   writeNote,
@@ -65,14 +65,14 @@ export async function createNote(workspaceRoot: string): Promise<void> {
 
   await ensureLocalIgnored(workspaceRoot);
   await writeNote(note);
-  await openNote(note);
+  await openNote(note.notePath);
 }
 
 /** Jump to the code a note annotates, re-resolving the anchor on the way. */
 export async function revealNote(workspaceRoot: string, note: Note): Promise<void> {
   // Folder and repo notes have no line to jump to, so open the note itself.
   if (isDirectoryNote(note)) {
-    await openNote(note);
+    await openNote(note.notePath);
     return;
   }
 
@@ -87,13 +87,14 @@ export async function revealNote(workspaceRoot: string, note: Note): Promise<voi
 
   // The stored line is only a hint — anything inserted above the note has moved
   // it. Trusting the stored number is the fastest way to feel broken.
-  const snippetLine = findSnippetLine(document.getText(), note.snippet, note.line);
   const lastLine = Math.max(document.lineCount - 1, 0);
-  const line = snippetLine >= 0
-    ? snippetLine
-    : Math.min((note.line ?? 1) - 1, lastLine);
+  const resolvedLine = resolveNoteLine(note, document.getText());
 
-  if (snippetLine < 0 && note.snippet) {
+  // Unlike the gutter, which hides a pin it cannot place, jumping is best-effort:
+  // the last known line is still the most useful place to land.
+  const line = Math.min(resolvedLine ?? (note.line ?? 1) - 1, lastLine);
+
+  if (resolvedLine === undefined && note.snippet) {
     vscode.window.showWarningMessage(
       `Lore: the code for "${note.title}" moved or was deleted — showing its last known line.`,
     );
@@ -105,9 +106,9 @@ export async function revealNote(workspaceRoot: string, note: Note): Promise<voi
   editor.revealRange(targetRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
-/** Open the note's Markdown file, cursor parked in the body. */
-export async function openNote(note: Note): Promise<void> {
-  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(note.notePath));
+/** Open a note's Markdown file, cursor parked at the end of the body. */
+export async function openNote(notePath: string): Promise<void> {
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(notePath));
   const editor = await vscode.window.showTextDocument(document);
 
   const lastLine = Math.max(document.lineCount - 1, 0);
