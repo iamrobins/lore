@@ -89,17 +89,11 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
-      # Uploadable by hand from the run's artifacts when the Marketplace step
-      # was skipped, so a release is never blocked on that one credential.
+      # Built here so it can be attached to the release below, which is where
+      # the manual upload starts when the Marketplace step was skipped.
       - name: Package the extension for manual upload
         if: steps.gate.outputs.release == 'true' && steps.gate.outputs.marketplace != 'true'
         run: npx --yes @vscode/vsce package --out lore.vsix
-
-      - uses: actions/upload-artifact@v4
-        if: steps.gate.outputs.release == 'true' && steps.gate.outputs.marketplace != 'true'
-        with:
-          name: lore-vsix-v${{ steps.gate.outputs.version }}
-          path: lore.vsix
 
       # The plugin ships as the repository itself, so there is nothing to upload.
       # Tagging is what marks the version as released, and what stops the next
