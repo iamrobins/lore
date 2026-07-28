@@ -4,7 +4,7 @@
   "description": "Notes that live beside your code instead of inside it. Stored as Markdown in git, readable by AI coding agents.",
   "version": "0.1.0",
   "license": "MIT",
-  "publisher": "lore",
+  "publisher": "iamrobins",
   "engines": {
     "vscode": "^1.85.0"
   },
