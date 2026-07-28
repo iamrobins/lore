@@ -12,6 +12,7 @@ import * as vscode from 'vscode';
 import {
   LORE_DIRECTORY,
   Note,
+  isDirectoryNote,
   notesForDirectory,
   toPosixPath,
   workspaceNotes,
@@ -19,7 +20,7 @@ import {
 
 const MAX_TOOLTIP_LENGTH = 600;
 
-type GroupKind = 'directory' | 'personal' | 'team' | 'workspace' | 'unanchored';
+type GroupKind = 'directory' | 'all' | 'personal' | 'team' | 'workspace' | 'unanchored';
 
 class GroupItem extends vscode.TreeItem {
   readonly itemType = 'group' as const;
@@ -29,6 +30,8 @@ class GroupItem extends vscode.TreeItem {
     readonly groupKind: GroupKind,
     readonly notes: Note[],
     icon: vscode.ThemeIcon,
+    /** Whether these notes come from more than one directory. */
+    readonly spansDirectories = false,
   ) {
     super(label, vscode.TreeItemCollapsibleState.Expanded);
     this.iconPath = icon;
@@ -36,16 +39,25 @@ class GroupItem extends vscode.TreeItem {
   }
 }
 
+interface NoteItemOptions {
+  unanchored?: boolean;
+  /** Show the full path, for lists spanning more than one directory. */
+  showDirectory?: boolean;
+}
+
 class NoteItem extends vscode.TreeItem {
   readonly itemType = 'note' as const;
 
-  constructor(readonly note: Note, isUnanchored = false) {
+  constructor(
+    readonly note: Note,
+    { unanchored = false, showDirectory = false }: NoteItemOptions = {},
+  ) {
     super(note.title, vscode.TreeItemCollapsibleState.None);
 
-    this.description = isUnanchored ? 'anchor lost' : describeLocation(note);
+    this.description = unanchored ? 'anchor lost' : describeLocation(note, showDirectory);
     this.tooltip = buildTooltip(note);
     // Theme colours rather than hex, so the icons stay legible in every theme.
-    this.iconPath = isUnanchored
+    this.iconPath = unanchored
       ? new vscode.ThemeIcon('circle-outline', new vscode.ThemeColor('list.warningForeground'))
       : new vscode.ThemeIcon(
           'circle-filled',
@@ -56,7 +68,7 @@ class NoteItem extends vscode.TreeItem {
       title: 'Go to Code',
       arguments: [note],
     };
-    this.contextValue = isUnanchored ? 'loreNote.unanchored' : `loreNote.${note.scope}`;
+    this.contextValue = unanchored ? 'loreNote.unanchored' : `loreNote.${note.scope}`;
   }
 }
 
@@ -124,6 +136,22 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
           new vscode.ThemeIcon('folder'),
         ),
       );
+    } else {
+      // No file has been opened yet, so there is no directory to scope to.
+      // Listing every note beats listing none — an empty panel here is
+      // indistinguishable from a repository that has no notes at all.
+      const fileNotes = this.notes.filter((note) => !isDirectoryNote(note));
+      if (fileNotes.length > 0) {
+        groups.push(
+          new GroupItem(
+            `All Notes (${fileNotes.length})`,
+            'all',
+            fileNotes,
+            new vscode.ThemeIcon('files'),
+            true,
+          ),
+        );
+      }
     }
 
     const folderNotes = workspaceNotes(this.notes);
@@ -134,6 +162,7 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
           'workspace',
           folderNotes,
           new vscode.ThemeIcon('root-folder'),
+          true,
         ),
       );
     }
@@ -142,11 +171,15 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
   }
 
   private childrenOfGroup(group: GroupItem): LoreTreeItem[] {
+    // Groups that span directories need the path on each row to stay unambiguous.
+    const showDirectory = group.spansDirectories;
+
     if (group.groupKind === 'unanchored') {
-      return group.notes.map((note) => new NoteItem(note, true));
+      return group.notes.map((note) => new NoteItem(note, { unanchored: true, showDirectory }));
     }
-    if (group.groupKind !== 'directory') {
-      return group.notes.map((note) => new NoteItem(note));
+    // Only the two file-note groups split by scope; the rest are already leaves.
+    if (group.groupKind !== 'directory' && group.groupKind !== 'all') {
+      return group.notes.map((note) => new NoteItem(note, { showDirectory }));
     }
 
     const unanchoredNotes = group.notes.filter((note) => this.unanchoredNotePaths.has(note.notePath));
@@ -163,6 +196,7 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
           'personal',
           personalNotes,
           new vscode.ThemeIcon('account'),
+          showDirectory,
         ),
       );
     }
@@ -173,6 +207,7 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
           'team',
           teamNotes,
           new vscode.ThemeIcon('organization'),
+          showDirectory,
         ),
       );
     }
@@ -183,6 +218,7 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
           'unanchored',
           unanchoredNotes,
           new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground')),
+          showDirectory,
         ),
       );
     }
@@ -216,9 +252,9 @@ function activeEditorDirectory(workspaceRoot: string): string | undefined {
   return directory === '.' ? '' : toPosixPath(directory);
 }
 
-function describeLocation(note: Note): string {
-  const fileName = path.basename(note.targetPath);
-  return note.line === undefined ? fileName : `${fileName}:${note.line}`;
+function describeLocation(note: Note, showDirectory: boolean): string {
+  const location = showDirectory ? note.targetPath : path.basename(note.targetPath);
+  return note.line === undefined ? location : `${location}:${note.line}`;
 }
 
 function haveSameMembers(left: Set<string>, right: Set<string>): boolean {
