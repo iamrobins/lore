@@ -1,6 +1,6 @@
 # @lore/mcp
 
-Read and write [Lore](https://github.com/iamrobins/Lore) notes from any AI coding agent that speaks MCP.
+Read and write [Lore](https://github.com/iamrobins/lore) notes from any AI coding agent that speaks MCP.
 
 Lore notes are Markdown files in a repository's `.lore/` directory that record
 what source comments cannot: why code is the way it is, constraints that are not
