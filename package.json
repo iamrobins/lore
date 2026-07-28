@@ -69,6 +69,16 @@
         "command": "lore.reattach",
         "title": "Re-attach Note to Cursor",
         "category": "Lore"
+      },
+      {
+        "command": "lore.share",
+        "title": "Share with Team",
+        "category": "Lore"
+      },
+      {
+        "command": "lore.unshare",
+        "title": "Make Personal",
+        "category": "Lore"
       }
     ],
     "menus": {
@@ -89,6 +99,16 @@
           "command": "lore.reattach",
           "when": "view == lore.notes && viewItem =~ /^loreNote/",
           "group": "1_modify"
+        },
+        {
+          "command": "lore.share",
+          "when": "view == lore.notes && viewItem == loreNote.personal",
+          "group": "2_scope"
+        },
+        {
+          "command": "lore.unshare",
+          "when": "view == lore.notes && viewItem == loreNote.team",
+          "group": "2_scope"
         }
       ]
     },

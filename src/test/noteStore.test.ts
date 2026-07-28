@@ -8,6 +8,7 @@ import {
   ensureLocalIgnored,
   findSnippetLine,
   findSymbolLine,
+  moveNoteToScope,
   notesForDirectory,
   notesForFile,
   parseNote,
@@ -213,6 +214,62 @@ test('readAllNotes returns nothing rather than throwing when .lore is absent', a
   await fs.rm(workspaceRoot, { recursive: true, force: true });
 });
 
+test('moveNoteToScope moves the file between directories and keeps the body', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lore-test-'));
+  const personalPath = path.join(workspaceRoot, '.lore', 'local', 'payment-retry-loop.md');
+  const note = parseNote(REALISTIC_NOTE, personalPath, 'personal');
+  await fs.mkdir(path.dirname(personalPath), { recursive: true });
+  await fs.writeFile(personalPath, serializeNote(note));
+
+  const shared = await moveNoteToScope(workspaceRoot, note, 'team');
+
+  assert.equal(shared.scope, 'team');
+  assert.equal(path.dirname(shared.notePath), path.join(workspaceRoot, '.lore', 'notes'));
+  // The old copy is gone, so the note is not listed twice.
+  assert.equal(await pathExists(personalPath), false);
+
+  const [reread] = await readAllNotes(workspaceRoot);
+  assert.equal(reread.scope, 'team');
+  assert.equal(reread.title, 'Payment retry loop');
+  assert.equal(reread.snippet, note.snippet);
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+});
+
+test('moveNoteToScope avoids clobbering a team note of the same name', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lore-test-'));
+  const teamDirectory = path.join(workspaceRoot, '.lore', 'notes');
+  await fs.mkdir(teamDirectory, { recursive: true });
+  await fs.writeFile(path.join(teamDirectory, 'payment-retry-loop.md'), REALISTIC_NOTE);
+
+  const personalPath = path.join(workspaceRoot, '.lore', 'local', 'payment-retry-loop.md');
+  const note = parseNote(REALISTIC_NOTE, personalPath, 'personal');
+  await fs.mkdir(path.dirname(personalPath), { recursive: true });
+  await fs.writeFile(personalPath, serializeNote(note));
+
+  const shared = await moveNoteToScope(workspaceRoot, note, 'team');
+
+  assert.equal(path.basename(shared.notePath), 'payment-retry-loop-2.md');
+  assert.equal((await readAllNotes(workspaceRoot)).length, 2);
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+});
+
+test('moveNoteToScope is a no-op when the note is already in that scope', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lore-test-'));
+  const notePath = path.join(workspaceRoot, '.lore', 'notes', 'shared.md');
+  const note = parseNote(REALISTIC_NOTE, notePath, 'team');
+  await fs.mkdir(path.dirname(notePath), { recursive: true });
+  await fs.writeFile(notePath, serializeNote(note));
+
+  const result = await moveNoteToScope(workspaceRoot, note, 'team');
+
+  assert.equal(result.notePath, notePath);
+  assert.equal(await pathExists(notePath), true);
+
+  await fs.rm(workspaceRoot, { recursive: true, force: true });
+});
+
 test('ensureLocalIgnored adds the rule once and never duplicates it', async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lore-test-'));
   const gitignorePath = path.join(workspaceRoot, '.gitignore');
@@ -263,6 +320,15 @@ test('ensureLocalIgnored recognises the rule written without a trailing slash', 
 
   await fs.rm(workspaceRoot, { recursive: true, force: true });
 });
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function noteFor(targetPath: string): Note {
   return {

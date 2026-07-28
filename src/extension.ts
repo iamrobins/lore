@@ -9,7 +9,15 @@
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { createNote, openNote, reattachNote, refreshAnchor, revealNote } from './commands';
+import {
+  createNote,
+  openNote,
+  reattachNote,
+  refreshAnchor,
+  revealNote,
+  shareNote,
+  unshareNote,
+} from './commands';
 import { LORE_DIRECTORY, Note, notesForFile, readAllNotes, toPosixPath } from './noteStore';
 import { NoteRenderer } from './noteRenderer';
 import { LoreTreeItem, NoteTreeProvider } from './noteTree';
@@ -103,6 +111,18 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('lore.openNote', (target?: LoreTreeItem | string) => {
       const notePath = notePathOf(target);
       return notePath === undefined ? undefined : openNote(notePath);
+    }),
+    // Sharing changes the note's path, so anything tracked under the old one
+    // has to be dropped and resolved again.
+    vscode.commands.registerCommand('lore.share', async (item?: LoreTreeItem) => {
+      if (item?.itemType !== 'note') return;
+      await shareNote(workspaceRoot, item.note);
+      renderer.forgetTrackedPositions();
+    }),
+    vscode.commands.registerCommand('lore.unshare', async (item?: LoreTreeItem) => {
+      if (item?.itemType !== 'note') return;
+      await unshareNote(workspaceRoot, item.note);
+      renderer.forgetTrackedPositions();
     }),
   );
 

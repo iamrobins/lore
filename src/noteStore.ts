@@ -169,6 +169,30 @@ export async function writeNote(note: Note): Promise<void> {
   await fs.writeFile(note.notePath, serializeNote(note), 'utf8');
 }
 
+/**
+ * Move a note to the other scope, which is all sharing amounts to: `.lore/local/`
+ * is gitignored and `.lore/notes/` is not, so the directory a note sits in *is*
+ * its visibility. Returns the note at its new path.
+ *
+ * Written before deleting, so a failure midway leaves a duplicate rather than
+ * losing the note.
+ */
+export async function moveNoteToScope(
+  workspaceRoot: string,
+  note: Note,
+  scope: NoteScope,
+): Promise<Note> {
+  if (note.scope === scope) return note;
+
+  const directory = notesDirectory(workspaceRoot, scope);
+  const fileName = toNoteFileName(note.title, await listNoteFileNames(directory));
+  const moved: Note = { ...note, scope, notePath: path.join(directory, fileName) };
+
+  await writeNote(moved);
+  await fs.rm(note.notePath, { force: true });
+  return moved;
+}
+
 export function toNoteFileName(title: string, takenFileNames: string[] = []): string {
   const slug =
     title

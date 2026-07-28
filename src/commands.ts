@@ -10,6 +10,7 @@ import {
   ensureLocalIgnored,
   isDirectoryNote,
   listNoteFileNames,
+  moveNoteToScope,
   notesDirectory,
   resolveNoteLine,
   toNoteFileName,
@@ -139,6 +140,34 @@ export async function reattachNote(workspaceRoot: string, note: Note): Promise<v
 
   vscode.window.showInformationMessage(
     `Lore: "${note.title}" re-attached to ${toPosixPath(relativePath)}:${cursorLine + 1}`,
+  );
+}
+
+/**
+ * Promote a personal note to the team, moving it out of the gitignored
+ * directory and into the one that travels with the repository.
+ *
+ * Confirmed first because it is the one action here that is hard to take back:
+ * once the note is committed and pushed, it is in everyone's history.
+ */
+export async function shareNote(workspaceRoot: string, note: Note): Promise<void> {
+  const confirmation = await vscode.window.showWarningMessage(
+    `Share "${note.title}" with the team?`,
+    { modal: true, detail: 'It moves into .lore/notes/, which is committed to git.' },
+    'Share',
+  );
+  if (confirmation !== 'Share') return;
+
+  await moveNoteToScope(workspaceRoot, note, 'team');
+  vscode.window.showInformationMessage(`Lore: "${note.title}" is now a team note. Commit .lore/notes/ to share it.`);
+}
+
+/** Take a team note back to personal, out of git's reach for future commits. */
+export async function unshareNote(workspaceRoot: string, note: Note): Promise<void> {
+  await ensureLocalIgnored(workspaceRoot);
+  await moveNoteToScope(workspaceRoot, note, 'personal');
+  vscode.window.showInformationMessage(
+    `Lore: "${note.title}" is personal again. Commit the deletion to remove it for others.`,
   );
 }
 
