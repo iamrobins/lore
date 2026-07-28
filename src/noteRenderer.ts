@@ -59,7 +59,12 @@ export class NoteRenderer implements vscode.HoverProvider {
 
   /** Where a note currently sits in an open document, if it is being tracked. */
   trackedLine(document: vscode.TextDocument, notePath: string): number | undefined {
-    return this.livePositions.linesFor(document.uri.toString()).get(notePath);
+    return this.livePositions.peek(document.uri.toString())?.get(notePath);
+  }
+
+  /** Stop tracking a note whose anchor changed on disk, or that was deleted. */
+  forgetNote(notePath: string): void {
+    this.livePositions.forgetNote(notePath);
   }
 
   forgetDocument(document: vscode.TextDocument): void {
@@ -116,8 +121,10 @@ export class NoteRenderer implements vscode.HoverProvider {
     const markdown = new vscode.MarkdownString(
       notesOnLine.map((entry) => renderNote(entry.note)).join('\n\n---\n\n'),
     );
-    // Required for the `command:` links that open and re-attach the note.
-    markdown.isTrusted = true;
+    // Scoped rather than blanket-trusted. Note bodies arrive from `git pull` and
+    // from AI agents via lore_write; with `isTrusted = true` any `command:` link
+    // in a body would render as a live, clickable command.
+    markdown.isTrusted = { enabledCommands: ['lore.openNote'] };
 
     return new vscode.Hover(markdown, document.lineAt(position.line).range);
   }
@@ -144,8 +151,14 @@ export class NoteRenderer implements vscode.HoverProvider {
     const untrackedNotes = fileNotes.filter((note) => !trackedLines.has(note.notePath));
 
     if (untrackedNotes.length > 0) {
-      const { lines } = await this.resolver.resolveAll(document, untrackedNotes);
-      for (const note of untrackedNotes) trackedLines.set(note.notePath, lines.get(note.notePath));
+      const lines = await this.resolver.resolveAll(document, untrackedNotes);
+      for (const note of untrackedNotes) {
+        const line = lines.get(note.notePath);
+        // Only successes are recorded. Caching a failure would freeze the note as
+        // "anchor lost" for as long as the file stays open, even once its code
+        // reappears.
+        if (line !== undefined) trackedLines.set(note.notePath, line);
+      }
     }
 
     const lastLine = Math.max(document.lineCount - 1, 0);

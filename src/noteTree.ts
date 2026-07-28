@@ -68,7 +68,10 @@ class NoteItem extends vscode.TreeItem {
       title: 'Go to Code',
       arguments: [note],
     };
-    this.contextValue = unanchored ? 'loreNote.unanchored' : `loreNote.${note.scope}`;
+    // Scope stays in the context value even when the anchor is lost, so Share
+    // and Make Personal remain available on exactly the notes a user is most
+    // likely to want to clean up. Menus match these with a prefix regex.
+    this.contextValue = `loreNote.${note.scope}${unanchored ? '.unanchored' : ''}`;
   }
 }
 

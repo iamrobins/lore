@@ -48,6 +48,48 @@ export interface Note {
   status: NoteStatus;
   author?: string;
   created?: string;
+  /**
+   * Frontmatter keys this tool does not know about, carried through unchanged.
+   * Notes are hand-editable, and rewriting an anchor must not silently delete
+   * someone's `ticket:` or `tags:`.
+   */
+  extra?: Record<string, unknown>;
+}
+
+const KNOWN_FRONTMATTER_KEYS = new Set([
+  'path',
+  'symbol',
+  'line',
+  'snippet',
+  'type',
+  'status',
+  'author',
+  'created',
+]);
+
+/**
+ * A workspace-relative POSIX path, or undefined when the target lies outside the
+ * workspace. Accepts absolute paths, `./` prefixes and backslashes, because the
+ * MCP tools take this straight from an AI agent — and agents hold absolute paths,
+ * since that is what Claude Code's own Read and Edit tools require.
+ *
+ * A trailing slash is preserved: it is what distinguishes a folder note from a
+ * file note.
+ */
+export function workspaceRelativePath(
+  workspaceRoot: string,
+  targetPath: string,
+): string | undefined {
+  const trimmed = targetPath.trim();
+  if (trimmed === '') return undefined;
+
+  const relative = path.isAbsolute(trimmed) ? path.relative(workspaceRoot, trimmed) : trimmed;
+  const normalized = path.posix.normalize(toPosixPath(relative));
+
+  if (normalized === '.' || normalized === './') return '.';
+  // `..` anywhere that survives normalisation means the path escapes the root.
+  if (normalized === '..' || normalized.startsWith('../')) return undefined;
+  return normalized;
 }
 
 /** Absolute path of the directory holding notes of the given scope. */
@@ -71,7 +113,9 @@ export function parseNote(rawMarkdown: string, notePath: string, scope: NoteScop
   return {
     notePath,
     scope,
-    targetPath: typeof data.path === 'string' ? toPosixPath(data.path) : '.',
+    // An empty or non-string `path` means the note is about the repository as a
+    // whole; treating '' as a file target produces a note anchored to nothing.
+    targetPath: toPosixPath(asOptionalString(data.path) ?? '.'),
     title: readTitle(body, notePath),
     body,
     symbol: asOptionalString(data.symbol),
@@ -81,6 +125,9 @@ export function parseNote(rawMarkdown: string, notePath: string, scope: NoteScop
     status: data.status === 'resolved' ? 'resolved' : 'open',
     author: asOptionalString(data.author),
     created: asOptionalDateString(data.created),
+    extra: Object.fromEntries(
+      Object.entries(data).filter(([key]) => !KNOWN_FRONTMATTER_KEYS.has(key)),
+    ),
   };
 }
 
@@ -96,7 +143,7 @@ export function serializeNote(note: Note): string {
   if (note.author) frontmatter.author = note.author;
   if (note.created) frontmatter.created = note.created;
 
-  return matter.stringify(`${note.body}\n`, frontmatter);
+  return matter.stringify(`${note.body}\n`, { ...frontmatter, ...note.extra });
 }
 
 /**
@@ -161,6 +208,15 @@ export async function listNoteFileNames(directory: string): Promise<string[]> {
     return entries.filter((entry) => entry.endsWith('.md'));
   } catch {
     return [];
+  }
+}
+
+/** Re-read one note from disk. Undefined when it is gone or unparseable. */
+export async function readNote(notePath: string, scope: NoteScope): Promise<Note | undefined> {
+  try {
+    return parseNote(await fs.readFile(notePath, 'utf8'), notePath, scope);
+  } catch {
+    return undefined;
   }
 }
 
@@ -280,11 +336,20 @@ export function workspaceNotes(notes: Note[]): Note[] {
  * `src/api/`, not only to the one it was written against.
  */
 export function notesApplyingTo(notes: Note[], targetPath: string): Note[] {
-  const target = toPosixPath(targetPath);
-  const segments = target.split('/');
+  // Normalised so './src/a.py' and 'src/a.py' resolve alike. Absolute paths must
+  // be put through workspaceRelativePath first — this cannot know the root.
+  const target = path.posix.normalize(toPosixPath(targetPath));
+  const isDirectory = target === '.' || target.endsWith('/');
 
-  // '.', then 'src/', 'src/api/', … then the file itself.
-  const scopes = ['.', ...segments.slice(0, -1).map((_, index) => `${segments.slice(0, index + 1).join('/')}/`), target];
+  const segments = target.split('/').filter((segment) => segment !== '' && segment !== '.');
+  // A folder target is its own last scope; a file target's last scope is itself.
+  const folderCount = isDirectory ? segments.length : segments.length - 1;
+
+  const scopes = ['.'];
+  for (let depth = 1; depth <= folderCount; depth += 1) {
+    scopes.push(`${segments.slice(0, depth).join('/')}/`);
+  }
+  if (!isDirectory) scopes.push(target);
 
   return scopes.flatMap((scope) => notes.filter((note) => note.targetPath === scope));
 }
@@ -332,10 +397,13 @@ export function findSnippetLine(
   const lines = documentText.split(/\r?\n/);
   const matchesAt = (index: number): boolean => lines[index]?.trim() === target;
 
+  // Downward is checked first: when a duplicated line matches at equal distance
+  // on both sides, the code has more likely drifted down (something was inserted
+  // above it) than up. Checking upward first picked the earlier duplicate.
   const hintIndex = (hintLine ?? 1) - 1;
   for (let distance = 0; distance <= SNIPPET_SEARCH_RADIUS; distance += 1) {
-    if (matchesAt(hintIndex - distance)) return hintIndex - distance;
     if (matchesAt(hintIndex + distance)) return hintIndex + distance;
+    if (matchesAt(hintIndex - distance)) return hintIndex - distance;
   }
 
   // Moved further than the radius — fall back to scanning the whole file.

@@ -102,13 +102,35 @@
         },
         {
           "command": "lore.share",
-          "when": "view == lore.notes && viewItem == loreNote.personal",
+          "when": "view == lore.notes && viewItem =~ /^loreNote\\.personal/",
           "group": "2_scope"
         },
         {
           "command": "lore.unshare",
-          "when": "view == lore.notes && viewItem == loreNote.team",
+          "when": "view == lore.notes && viewItem =~ /^loreNote\\.team/",
           "group": "2_scope"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "lore.reveal",
+          "when": "false"
+        },
+        {
+          "command": "lore.openNote",
+          "when": "false"
+        },
+        {
+          "command": "lore.reattach",
+          "when": "false"
+        },
+        {
+          "command": "lore.share",
+          "when": "false"
+        },
+        {
+          "command": "lore.unshare",
+          "when": "false"
         }
       ]
     },
@@ -123,10 +145,12 @@
   "scripts": {
     "compile": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "check": "tsc && tsc -p mcp",
+    "check": "tsc && tsc -p mcp && tsc -p plugin",
     "test": "npm run check && node --test \"out/**/*.test.js\"",
     "vscode:prepublish": "npm run compile",
-    "compile:mcp": "node mcp/build.mjs"
+    "compile:mcp": "node mcp/build.mjs",
+    "compile:plugin": "node plugin/build.mjs",
+    "compile:all": "npm run compile && npm run compile:mcp && npm run compile:plugin"
   },
   "dependencies": {
     "gray-matter": "^4.0.3"

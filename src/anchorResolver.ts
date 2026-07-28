@@ -18,31 +18,23 @@
 import * as vscode from 'vscode';
 import { Note, SymbolOutline, findSymbolLine, resolveNoteLine } from './noteStore';
 
-export interface ResolvedAnchors {
-  /** Note path to 0-indexed line, for notes that could be placed. */
-  lines: Map<string, number>;
-  /** Note paths whose anchor is lost entirely. */
-  unanchoredNotePaths: string[];
-}
-
 export class AnchorResolver {
   private readonly outlineCache = new Map<string, { version: number; outline: SymbolOutline[] }>();
 
-  async resolveAll(document: vscode.TextDocument, notes: Note[]): Promise<ResolvedAnchors> {
+  /**
+   * Note path to 0-indexed line. A note that could not be placed is simply
+   * absent — the caller treats a missing entry as unanchored, so there is no
+   * second list to keep in step with this one.
+   */
+  async resolveAll(document: vscode.TextDocument, notes: Note[]): Promise<Map<string, number>> {
     const documentText = document.getText();
     const lines = new Map<string, number>();
     const needSymbolLookup: Note[] = [];
-    const unanchoredNotePaths: string[] = [];
 
     for (const note of notes) {
       const snippetLine = resolveNoteLine(note, documentText);
-      if (snippetLine !== undefined) {
-        lines.set(note.notePath, snippetLine);
-      } else if (note.symbol) {
-        needSymbolLookup.push(note);
-      } else {
-        unanchoredNotePaths.push(note.notePath);
-      }
+      if (snippetLine !== undefined) lines.set(note.notePath, snippetLine);
+      else if (note.symbol) needSymbolLookup.push(note);
     }
 
     // The symbol provider is only asked when something actually drifted, so the
@@ -51,12 +43,11 @@ export class AnchorResolver {
       const outline = await this.outlineFor(document);
       for (const note of needSymbolLookup) {
         const symbolLine = findSymbolLine(outline, note.symbol as string);
-        if (symbolLine === undefined) unanchoredNotePaths.push(note.notePath);
-        else lines.set(note.notePath, symbolLine);
+        if (symbolLine !== undefined) lines.set(note.notePath, symbolLine);
       }
     }
 
-    return { lines, unanchoredNotePaths };
+    return lines;
   }
 
   private async outlineFor(document: vscode.TextDocument): Promise<SymbolOutline[]> {
@@ -70,6 +61,10 @@ export class AnchorResolver {
     );
     const outline = toOutline(symbols ?? []);
 
+    // Earns its keep now that unresolved notes are retried on every redraw: a
+    // file with an orphaned note would otherwise hit the symbol provider several
+    // times a second while it is open.
+    //
     // ponytail: unbounded map keyed by document URI. Documents are few and the
     // entries are small; evict on close if a session ever holds thousands.
     this.outlineCache.set(cacheKey, { version: document.version, outline });

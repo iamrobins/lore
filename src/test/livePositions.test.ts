@@ -46,6 +46,22 @@ test('pressing Enter at the end of the annotated line leaves the note behind', (
   assert.equal(shiftLine(19, insertAt(19, 42, 1)), 19);
 });
 
+test('a replacement that consumes the annotated line leaves the note on it', () => {
+  // Regression: the "pushed down from column zero" branch used to fire for any
+  // edit starting on the tracked line, including ones that replaced it, and then
+  // added the replacement's height on top — walking the note off the new text.
+
+  // Select the line and paste a replacement (Ctrl+L, paste).
+  assert.equal(shiftLine(3, { startLine: 3, startCharacter: 0, endLine: 4, addedLineCount: 1 }), 3);
+
+  // Replace three lines starting at the note's line with three new ones.
+  assert.equal(shiftLine(3, { startLine: 3, startCharacter: 0, endLine: 5, addedLineCount: 3 }), 3);
+
+  // Format-on-save: one edit replacing the whole document. A note on line 1 of
+  // any file was destroyed by this.
+  assert.equal(shiftLine(0, { startLine: 0, startCharacter: 0, endLine: 2, addedLineCount: 3 }), 0);
+});
+
 test('a note swallowed by a multi-line replacement clamps into the new text', () => {
   // Lines 10 to 20 replaced by two lines; a note on 15 has nowhere exact to go.
   assert.equal(shiftLine(15, { startLine: 10, startCharacter: 0, endLine: 20, addedLineCount: 1 }), 11);
@@ -65,15 +81,31 @@ test('LivePositions shifts every tracked note in a document at once', () => {
   const lines = positions.linesFor('file:///calc.py');
   lines.set('/notes/a.md', 5);
   lines.set('/notes/b.md', 19);
-  lines.set('/notes/orphan.md', undefined);
 
   positions.applyEdits('file:///calc.py', [insertAt(0, 0, 2)]);
 
   assert.equal(lines.get('/notes/a.md'), 7);
   assert.equal(lines.get('/notes/b.md'), 21);
-  // An unanchored note has no line to shift and must stay unanchored.
-  assert.equal(lines.get('/notes/orphan.md'), undefined);
-  assert.equal(lines.has('/notes/orphan.md'), true);
+});
+
+test('forgetNote drops one note across every document', () => {
+  // A surviving entry would pin a re-anchored note to its old line, and a new
+  // note slugging to a deleted note's filename would inherit its position.
+  const positions = new LivePositions();
+  positions.linesFor('file:///a.py').set('/notes/shared.md', 5);
+  positions.linesFor('file:///b.py').set('/notes/shared.md', 9);
+  positions.linesFor('file:///b.py').set('/notes/other.md', 3);
+
+  positions.forgetNote('/notes/shared.md');
+
+  assert.equal(positions.linesFor('file:///a.py').has('/notes/shared.md'), false);
+  assert.equal(positions.linesFor('file:///b.py').has('/notes/shared.md'), false);
+  assert.equal(positions.linesFor('file:///b.py').get('/notes/other.md'), 3);
+});
+
+test('peek does not create an entry for an untracked document', () => {
+  const positions = new LivePositions();
+  assert.equal(positions.peek('file:///never-opened.py'), undefined);
 });
 
 test('LivePositions leaves other documents alone', () => {

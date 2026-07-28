@@ -12,6 +12,7 @@ import {
   listNoteFileNames,
   moveNoteToScope,
   notesDirectory,
+  readNote,
   resolveNoteLine,
   toNoteFileName,
   toPosixPath,
@@ -69,8 +70,25 @@ export async function createNote(workspaceRoot: string): Promise<void> {
   await openNote(note.notePath);
 }
 
-/** Jump to the code a note annotates, re-resolving the anchor on the way. */
-export async function revealNote(workspaceRoot: string, note: Note): Promise<void> {
+/**
+ * Jump to the code a note annotates.
+ *
+ * `trackedLineIn` reports where the editor is currently drawing the note's
+ * marker. It wins over re-resolving, because unsaved edits to the annotated line
+ * defeat the stored snippet — without it, clicking a note warned that its code
+ * had been deleted while its own marker sat correctly two lines away.
+ */
+export async function revealNote(
+  workspaceRoot: string,
+  note: Note | undefined,
+  trackedLineIn: (document: vscode.TextDocument) => number | undefined = () => undefined,
+): Promise<void> {
+  // Reachable with nothing selected when run from the command palette.
+  if (!note) {
+    vscode.window.showInformationMessage('Lore: pick a note in the Lore sidebar to go to its code.');
+    return;
+  }
+
   // Folder and repo notes have no line to jump to, so open the note itself.
   if (isDirectoryNote(note)) {
     await openNote(note.notePath);
@@ -89,10 +107,10 @@ export async function revealNote(workspaceRoot: string, note: Note): Promise<voi
   // The stored line is only a hint — anything inserted above the note has moved
   // it. Trusting the stored number is the fastest way to feel broken.
   const lastLine = Math.max(document.lineCount - 1, 0);
-  const resolvedLine = resolveNoteLine(note, document.getText());
+  const resolvedLine = trackedLineIn(document) ?? resolveNoteLine(note, document.getText());
 
-  // Unlike the gutter, which hides a pin it cannot place, jumping is best-effort:
-  // the last known line is still the most useful place to land.
+  // Unlike the marker, which draws nothing where it cannot place a note, jumping
+  // is best-effort: the last known line is still the most useful place to land.
   const line = Math.min(resolvedLine ?? (note.line ?? 1) - 1, lastLine);
 
   if (resolvedLine === undefined && note.snippet) {
@@ -184,14 +202,26 @@ export async function refreshAnchor(
   note: Note,
   line: number,
 ): Promise<boolean> {
-  const snippet = document.lineAt(line).text.trim() || undefined;
-  if (snippet === note.snippet && note.line === line + 1) return false;
+  const safeLine = Math.min(Math.max(line, 0), Math.max(document.lineCount - 1, 0));
+  const snippet = document.lineAt(safeLine).text.trim() || undefined;
+  if (snippet === note.snippet && note.line === safeLine + 1) return false;
+
+  // Re-read instead of trusting the caller's copy, which comes from a cache
+  // refreshed on a debounce. Writing that copy back would revert a body edited
+  // in the meantime — or recreate a note just deleted.
+  const current = await readNote(note.notePath, note.scope);
+  if (!current) return false;
+
+  const symbol = await enclosingSymbolName(document.uri, new vscode.Position(safeLine, 0));
 
   await writeNote({
-    ...note,
-    line: line + 1,
+    ...current,
+    line: safeLine + 1,
     snippet,
-    symbol: await enclosingSymbolName(document.uri, new vscode.Position(line, 0)),
+    // Keep the recorded symbol when no provider answered. A language server that
+    // has not finished starting would otherwise delete the symbol anchor — the
+    // one tier that survives edits to the annotated line.
+    symbol: symbol ?? current.symbol,
   });
   return true;
 }

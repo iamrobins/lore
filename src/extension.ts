@@ -45,7 +45,20 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   const reloadNotes = async (): Promise<void> => {
+    const previousNotes = new Map(currentNotes.map((note) => [note.notePath, note]));
     currentNotes = await readAllNotes(workspaceRoot);
+
+    // A tracked line outlives the anchor it came from unless it is dropped here.
+    // Without this, hand-editing a note's `line:` had no effect and was then
+    // reverted by the next save, and a new note that slugged to a deleted note's
+    // filename inherited its position.
+    for (const note of currentNotes) {
+      const before = previousNotes.get(note.notePath);
+      if (!before || anchorChanged(before, note)) renderer.forgetNote(note.notePath);
+      previousNotes.delete(note.notePath);
+    }
+    for (const deletedNotePath of previousNotes.keys()) renderer.forgetNote(deletedNotePath);
+
     treeProvider.setNotes(currentNotes);
     renderer.setNotes(currentNotes);
     await redraw();
@@ -100,30 +113,49 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidSaveTextDocument((document) => void refreshAnchorsIn(document)),
     vscode.workspace.onDidCloseTextDocument((document) => renderer.forgetDocument(document)),
 
-    vscode.commands.registerCommand('lore.new', () => createNote(workspaceRoot)),
-    vscode.commands.registerCommand('lore.reveal', (note: Note) => revealNote(workspaceRoot, note)),
-    vscode.commands.registerCommand('lore.reattach', async (item?: LoreTreeItem) => {
-      if (item?.itemType !== 'note') return;
-      await reattachNote(workspaceRoot, item.note);
-      // Every tracked line was based on the old anchor.
-      renderer.forgetTrackedPositions();
-    }),
-    vscode.commands.registerCommand('lore.openNote', (target?: LoreTreeItem | string) => {
-      const notePath = notePathOf(target);
-      return notePath === undefined ? undefined : openNote(notePath);
-    }),
+    vscode.commands.registerCommand('lore.new', reporting(() => createNote(workspaceRoot))),
+    vscode.commands.registerCommand(
+      'lore.reveal',
+      reporting((note?: Note) =>
+        revealNote(workspaceRoot, note, (document) =>
+          note ? renderer.trackedLine(document, note.notePath) : undefined,
+        ),
+      ),
+    ),
+    vscode.commands.registerCommand(
+      'lore.reattach',
+      reporting(async (item?: LoreTreeItem) => {
+        if (item?.itemType !== 'note') return;
+        await reattachNote(workspaceRoot, item.note);
+        // Every tracked line was based on the old anchor.
+        renderer.forgetTrackedPositions();
+      }),
+    ),
+    vscode.commands.registerCommand(
+      'lore.openNote',
+      reporting(async (target?: LoreTreeItem | string) => {
+        const notePath = notePathOf(target);
+        if (notePath !== undefined) await openNote(notePath);
+      }),
+    ),
     // Sharing changes the note's path, so anything tracked under the old one
     // has to be dropped and resolved again.
-    vscode.commands.registerCommand('lore.share', async (item?: LoreTreeItem) => {
-      if (item?.itemType !== 'note') return;
-      await shareNote(workspaceRoot, item.note);
-      renderer.forgetTrackedPositions();
-    }),
-    vscode.commands.registerCommand('lore.unshare', async (item?: LoreTreeItem) => {
-      if (item?.itemType !== 'note') return;
-      await unshareNote(workspaceRoot, item.note);
-      renderer.forgetTrackedPositions();
-    }),
+    vscode.commands.registerCommand(
+      'lore.share',
+      reporting(async (item?: LoreTreeItem) => {
+        if (item?.itemType !== 'note') return;
+        await shareNote(workspaceRoot, item.note);
+        renderer.forgetTrackedPositions();
+      }),
+    ),
+    vscode.commands.registerCommand(
+      'lore.unshare',
+      reporting(async (item?: LoreTreeItem) => {
+        if (item?.itemType !== 'note') return;
+        await unshareNote(workspaceRoot, item.note);
+        renderer.forgetTrackedPositions();
+      }),
+    ),
   );
 
   void reloadNotes();
@@ -136,6 +168,33 @@ export function deactivate(): void {
 /** Note files are not annotation targets, so saving one must not rewrite anchors. */
 function isInsideLoreDirectory(filePath: string): boolean {
   return toPosixPath(filePath).includes(`/${LORE_DIRECTORY}/`);
+}
+
+/** Whether a note now points somewhere different from the copy we were holding. */
+function anchorChanged(before: Note, after: Note): boolean {
+  return (
+    before.line !== after.line ||
+    before.snippet !== after.snippet ||
+    before.symbol !== after.symbol ||
+    before.targetPath !== after.targetPath
+  );
+}
+
+/**
+ * Run a command, reporting failure. Writing a note can fail for ordinary reasons
+ * — a read-only file, a file held open by another process — and without this the
+ * user is told nothing while their note goes unsaved.
+ */
+function reporting<T extends unknown[]>(
+  action: (...args: T) => Promise<void>,
+): (...args: T) => Promise<void> {
+  return async (...args: T) => {
+    try {
+      await action(...args);
+    } catch (error) {
+      vscode.window.showErrorMessage(`Lore: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 }
 
 /** The sidebar button passes a tree item; the hover link passes a path. */

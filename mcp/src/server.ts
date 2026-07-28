@@ -25,6 +25,7 @@ import {
   searchNotes,
   toNoteFileName,
   toPosixPath,
+  workspaceRelativePath,
   writeNote,
 } from '../../src/noteStore';
 
@@ -51,14 +52,21 @@ server.registerTool(
     },
   },
   async ({ path: targetPath }) => {
-    const notes = await readAllNotes(workspaceRoot);
-    const applicable = notesApplyingTo(notes, toPosixPath(targetPath));
+    // Agents hold absolute paths — that is what Claude Code's Read and Edit
+    // tools require — so normalising here is what makes this tool work at all
+    // for its main caller.
+    const relativePath = workspaceRelativePath(workspaceRoot, targetPath);
+    if (relativePath === undefined) {
+      return textResult(`${targetPath} is outside this repository, so it has no Lore notes.`);
+    }
+
+    const applicable = notesApplyingTo(await readAllNotes(workspaceRoot), relativePath);
 
     if (applicable.length === 0) {
-      return textResult(`No Lore notes apply to ${targetPath}.`);
+      return textResult(`No Lore notes apply to ${relativePath}.`);
     }
     return textResult(
-      [`${applicable.length} Lore note(s) apply to ${targetPath}:`, '', ...applicable.map(renderNote)].join('\n'),
+      [`${applicable.length} Lore note(s) apply to ${relativePath}:`, '', ...applicable.map(renderNote)].join('\n'),
     );
   },
 );
@@ -124,13 +132,22 @@ server.registerTool(
     },
   },
   async ({ path: targetPath, title, body, symbol, line, snippet, type, scope }) => {
+    // An absolute path stored verbatim would produce a note that is written
+    // successfully, reported successfully, and never matches a file again.
+    const relativePath = workspaceRelativePath(workspaceRoot, targetPath);
+    if (relativePath === undefined) {
+      return textResult(
+        `Cannot write a note for ${targetPath}: it is outside this repository.`,
+      );
+    }
+
     const noteScope: NoteScope = scope ?? 'personal';
     const directory = notesDirectory(workspaceRoot, noteScope);
     const fileName = toNoteFileName(title, await listNoteFileNames(directory));
 
     const note: Note = {
       notePath: path.join(directory, fileName),
-      targetPath: toPosixPath(targetPath),
+      targetPath: relativePath,
       scope: noteScope,
       title,
       // The title leads as an H1 so the file reads correctly in any Markdown

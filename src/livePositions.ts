@@ -36,10 +36,21 @@ export function shiftLine(line: number, edit: LineEdit): number {
   // The edit landed on the tracked line itself. Keeping the note attached here
   // is the entire point of this module.
   //
+  // `endLine === startLine` is load-bearing: it restricts this branch to an edit
+  // confined to the tracked line, which can only have pushed its content down.
+  // Without it, a replacement that *consumed* the tracked line — format-on-save,
+  // or select-lines-and-paste — also matched, and then added the replacement's
+  // height on top, walking the note off the end of the new text.
+  //
   // ponytail: notes anchor to lines, not columns, so a split is judged by
   // whether the edit started at column zero. Track columns if this ever misplaces
   // a note in practice.
-  if (line === edit.startLine && edit.startCharacter === 0 && edit.addedLineCount > 0) {
+  if (
+    line === edit.startLine &&
+    edit.endLine === edit.startLine &&
+    edit.startCharacter === 0 &&
+    edit.addedLineCount > 0
+  ) {
     // Text was pushed down from the start of the line, so the content moved too.
     return line + edit.addedLineCount;
   }
@@ -55,17 +66,27 @@ export function shiftLineThrough(line: number, edits: readonly LineEdit[]): numb
 }
 
 export class LivePositions {
-  /** Document key to note path to line, where undefined means "anchor lost". */
-  private readonly byDocument = new Map<string, Map<string, number | undefined>>();
+  /**
+   * Document key to note path to line. Only notes that were successfully placed
+   * appear: a failure is never recorded, so a note whose code shows up later —
+   * a paste, a slow language server, a `git pull` — is retried on the next
+   * redraw instead of being stuck as "anchor lost" until the file is closed.
+   */
+  private readonly byDocument = new Map<string, Map<string, number>>();
 
   /** Tracked lines for a document, created empty on first use. */
-  linesFor(documentKey: string): Map<string, number | undefined> {
+  linesFor(documentKey: string): Map<string, number> {
     const existing = this.byDocument.get(documentKey);
     if (existing) return existing;
 
-    const created = new Map<string, number | undefined>();
+    const created = new Map<string, number>();
     this.byDocument.set(documentKey, created);
     return created;
+  }
+
+  /** Tracked lines for a document without creating an entry for it. */
+  peek(documentKey: string): Map<string, number> | undefined {
+    return this.byDocument.get(documentKey);
   }
 
   applyEdits(documentKey: string, edits: readonly LineEdit[]): void {
@@ -73,8 +94,17 @@ export class LivePositions {
     if (!lines || edits.length === 0) return;
 
     for (const [notePath, line] of lines) {
-      if (line !== undefined) lines.set(notePath, shiftLineThrough(line, edits));
+      lines.set(notePath, shiftLineThrough(line, edits));
     }
+  }
+
+  /**
+   * Stop tracking one note everywhere. Used when its anchor changed on disk, or
+   * it was deleted — a surviving entry would pin it to the old line, and worse,
+   * a new note that slugs to the same filename would inherit that position.
+   */
+  forgetNote(notePath: string): void {
+    for (const lines of this.byDocument.values()) lines.delete(notePath);
   }
 
   /** Drop a document's tracking, so its notes resolve afresh when reopened. */

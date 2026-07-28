@@ -8,6 +8,7 @@ import {
   ensureLocalIgnored,
   findSnippetLine,
   findSymbolLine,
+  isDirectoryNote,
   moveNoteToScope,
   notesApplyingTo,
   notesForDirectory,
@@ -19,6 +20,7 @@ import {
   serializeNote,
   toNoteFileName,
   workspaceNotes,
+  workspaceRelativePath,
   type Note,
 } from '../noteStore';
 
@@ -60,6 +62,36 @@ test('a snippet full of colons, quotes and parens survives a write/read round tr
   assert.deepEqual(reparsed, note);
 });
 
+test('frontmatter keys this tool does not know are carried through a rewrite', () => {
+  // Anchors are rewritten automatically when code moves. Losing a hand-added
+  // `ticket:` as a side effect of saving an unrelated source file is silent
+  // data loss the user never asked for.
+  const raw = [
+    '---',
+    'path: src/a.py',
+    'line: 4',
+    'ticket: ENG-481',
+    'tags:',
+    '  - perf',
+    '---',
+    '',
+    '# Kept',
+  ].join('\n');
+
+  const note = parseNote(raw, '/repo/.lore/local/kept.md', 'personal');
+  assert.deepEqual(note.extra, { ticket: 'ENG-481', tags: ['perf'] });
+
+  const rewritten = parseNote(serializeNote({ ...note, line: 9 }), note.notePath, 'personal');
+  assert.equal(rewritten.line, 9);
+  assert.deepEqual(rewritten.extra, { ticket: 'ENG-481', tags: ['perf'] });
+});
+
+test('an empty frontmatter path means the repository, not a nameless file', () => {
+  const note = parseNote('---\npath: ""\n---\n\n# Repo\n', '/repo/.lore/local/repo.md', 'personal');
+  assert.equal(note.targetPath, '.');
+  assert.equal(isDirectoryNote(note), true);
+});
+
 test('parseNote falls back to the filename when a note has no heading', () => {
   const note = parseNote('---\npath: src/a.ts\n---\n\njust a body\n', '/repo/.lore/local/quick-thought.md', 'personal');
   assert.equal(note.title, 'quick thought');
@@ -82,6 +114,23 @@ test('findSnippetLine follows code that moved down the file', () => {
 test('findSnippetLine prefers the match nearest the hint when lines repeat', () => {
   const text = ['}', '// a', '// b', '// c', '}', '// d'].join('\n');
   assert.equal(findSnippetLine(text, '}', 5), 4);
+});
+
+test('findSnippetLine breaks an equal-distance tie in favour of drifting down', () => {
+  // A note on b's `return None` (stored line 4) after one line is inserted at
+  // the top: the annotated code is now index 4, and a's is index 2 — both one
+  // step from the hint. Insertions above are the common case, so down wins.
+  const text = [
+    '# inserted',
+    'def a():',
+    '    return None',
+    'def b():',
+    '    return None',
+    'def c():',
+    '    return None',
+  ].join('\n');
+
+  assert.equal(findSnippetLine(text, 'return None', 4), 4);
 });
 
 test('findSnippetLine reports -1 when the code is gone', () => {
@@ -145,6 +194,49 @@ test('notesApplyingTo gathers repo, folder and file notes, broadest first', () =
     notesApplyingTo(notes, 'src/payment/service.py').map((note) => note.targetPath),
     ['.', 'src/', 'src/payment/', 'src/payment/service.py'],
   );
+});
+
+test('notesApplyingTo lists a folder or repo target once, not twice', () => {
+  // Regression: the target was appended unconditionally after the folder
+  // prefixes, so a folder or `.` target saw its own notes duplicated — and an
+  // agent read the same instruction twice.
+  const notes = [noteFor('.'), noteFor('src/'), noteFor('src/api/')];
+
+  assert.deepEqual(notesApplyingTo(notes, '.').map((note) => note.targetPath), ['.']);
+  assert.deepEqual(
+    notesApplyingTo(notes, 'src/api/').map((note) => note.targetPath),
+    ['.', 'src/', 'src/api/'],
+  );
+});
+
+test('notesApplyingTo normalises a ./-prefixed path', () => {
+  const notes = [noteFor('.'), noteFor('src/'), noteFor('src/api/auth.py')];
+
+  assert.deepEqual(
+    notesApplyingTo(notes, './src/api/auth.py').map((note) => note.targetPath),
+    ['.', 'src/', 'src/api/auth.py'],
+  );
+});
+
+test('workspaceRelativePath accepts what an AI agent actually passes', () => {
+  const root = path.join(path.sep, 'repo');
+
+  // Absolute is the normal case: Claude Code's Read and Edit tools require it.
+  assert.equal(workspaceRelativePath(root, path.join(root, 'src', 'api', 'auth.py')), 'src/api/auth.py');
+  assert.equal(workspaceRelativePath(root, './src/api/auth.py'), 'src/api/auth.py');
+  assert.equal(workspaceRelativePath(root, 'src/api/auth.py'), 'src/api/auth.py');
+  // A trailing slash is what makes a note a folder note, so it must survive.
+  assert.equal(workspaceRelativePath(root, 'src/api/'), 'src/api/');
+  assert.equal(workspaceRelativePath(root, '.'), '.');
+  assert.equal(workspaceRelativePath(root, path.join(root, 'src', '..')), '.');
+});
+
+test('workspaceRelativePath refuses paths that escape the workspace', () => {
+  const root = path.join(path.sep, 'repo');
+
+  assert.equal(workspaceRelativePath(root, '../secrets'), undefined);
+  assert.equal(workspaceRelativePath(root, 'src/../../secrets'), undefined);
+  assert.equal(workspaceRelativePath(root, ''), undefined);
 });
 
 test('notesApplyingTo returns repo-wide notes for a file at the root', () => {
