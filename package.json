@@ -1,0 +1,112 @@
+{
+  "name": "lore",
+  "displayName": "Lore — sticky notes & AI context for your code",
+  "description": "Notes that live beside your code instead of inside it. Stored as Markdown in git, readable by AI coding agents.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "lore",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "keywords": [
+    "notes",
+    "annotations",
+    "documentation",
+    "ai",
+    "context"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:.lore"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lore",
+          "title": "Lore",
+          "icon": "media/lore.svg"
+        }
+      ]
+    },
+    "views": {
+      "lore": [
+        {
+          "id": "lore.notes",
+          "name": "Notes"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "lore.notes",
+        "contents": "No notes yet.\n[Add a note](command:lore.new)\nNotes live in `.lore/` and travel with git."
+      }
+    ],
+    "commands": [
+      {
+        "command": "lore.new",
+        "title": "New Note",
+        "category": "Lore",
+        "icon": "$(add)"
+      },
+      {
+        "command": "lore.reveal",
+        "title": "Go to Code",
+        "category": "Lore"
+      },
+      {
+        "command": "lore.openNote",
+        "title": "Open Note",
+        "category": "Lore",
+        "icon": "$(edit)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "lore.new",
+          "when": "view == lore.notes",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "lore.openNote",
+          "when": "view == lore.notes && viewItem =~ /^loreNote/",
+          "group": "inline"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "lore.new",
+        "key": "alt+n",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "check": "tsc",
+    "test": "npm run check && node --test \"out/**/*.test.js\"",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  },
+  "allowScripts": {
+    "esbuild@0.23.1": true
+  }
+}
