@@ -64,6 +64,11 @@
         "title": "Open Note",
         "category": "Lore",
         "icon": "$(edit)"
+      },
+      {
+        "command": "lore.reattach",
+        "title": "Re-attach Note to Cursor",
+        "category": "Lore"
       }
     ],
     "menus": {
@@ -79,6 +84,11 @@
           "command": "lore.openNote",
           "when": "view == lore.notes && viewItem =~ /^loreNote/",
           "group": "inline"
+        },
+        {
+          "command": "lore.reattach",
+          "when": "view == lore.notes && viewItem =~ /^loreNote/",
+          "group": "1_modify"
         }
       ]
     },

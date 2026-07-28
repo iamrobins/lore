@@ -288,12 +288,12 @@ export function findSnippetLine(
 }
 
 /**
- * The 0-indexed line a note points at in the given text, or undefined when its
- * anchor is lost.
+ * The 0-indexed line a note's snippet points at, or undefined when the exact
+ * code it was written against is no longer in the file.
  *
- * A note whose snippet has disappeared returns undefined rather than its stale
- * line number: a pin sitting next to unrelated code is worse than no pin, and
- * the sidebar still lists the note either way.
+ * Undefined is not the end of the road — {@link findSymbolLine} is tried next by
+ * the caller. But a stale line number is never returned: a marker sitting beside
+ * unrelated code is worse than no marker, and the sidebar lists the note either way.
  */
 export function resolveNoteLine(note: Note, documentText: string): number | undefined {
   if (note.snippet) {
@@ -301,4 +301,50 @@ export function resolveNoteLine(note: Note, documentText: string): number | unde
     return foundLine >= 0 ? foundLine : undefined;
   }
   return note.line === undefined ? undefined : note.line - 1;
+}
+
+/**
+ * A language-agnostic view of a document's symbols, so the matching below stays
+ * testable without an extension host. Built from vscode.DocumentSymbol.
+ */
+export interface SymbolOutline {
+  name: string;
+  /** 0-indexed line of the symbol's declaration. */
+  line: number;
+  children: SymbolOutline[];
+}
+
+/**
+ * Line of the symbol a note was attached to, e.g. `Calculator.divide`.
+ *
+ * This is what keeps a note attached when the annotated line itself is edited —
+ * adding a parameter or a type hint defeats the snippet, but the function is
+ * still the function.
+ */
+export function findSymbolLine(outline: SymbolOutline[], dottedName: string): number | undefined {
+  const pathSegments = dottedName.split('.');
+
+  const exactMatch = findByPath(outline, pathSegments);
+  if (exactMatch !== undefined) return exactMatch;
+
+  // The path broke — most often a renamed parent class. The leaf name is still an
+  // unambiguous answer when exactly one symbol carries it; two or more and we
+  // would be guessing, so the note goes to the Unanchored bucket instead.
+  const leafName = pathSegments[pathSegments.length - 1];
+  const leafMatches = collectLinesNamed(outline, leafName);
+  return leafMatches.length === 1 ? leafMatches[0] : undefined;
+}
+
+function findByPath(symbols: SymbolOutline[], pathSegments: string[]): number | undefined {
+  const [head, ...rest] = pathSegments;
+  const match = symbols.find((symbol) => symbol.name === head);
+  if (!match) return undefined;
+  return rest.length === 0 ? match.line : findByPath(match.children, rest);
+}
+
+function collectLinesNamed(symbols: SymbolOutline[], name: string): number[] {
+  return symbols.flatMap((symbol) => [
+    ...(symbol.name === name ? [symbol.line] : []),
+    ...collectLinesNamed(symbol.children, name),
+  ]);
 }

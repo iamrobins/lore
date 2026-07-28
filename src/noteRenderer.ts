@@ -10,13 +10,15 @@
  *
  * Decoration and hover live together because they answer the same question —
  * which notes land on which line of this document right now — and that answer is
- * recomputed from the snippet on every redraw rather than cached, so markers
- * follow the code as you type above them.
+ * recomputed on every redraw rather than cached, so markers follow the code as
+ * you type above them.
  */
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { Note, NoteScope, notesForFile, resolveNoteLine, toPosixPath } from './noteStore';
+import { AnchorResolver } from './anchorResolver';
+import { LineEdit, LivePositions } from './livePositions';
+import { Note, NoteScope, notesForFile, toPosixPath } from './noteStore';
 
 const MAX_MARKER_TITLE_LENGTH = 60;
 
@@ -28,6 +30,9 @@ interface PlacedNote {
 
 export class NoteRenderer implements vscode.HoverProvider {
   private notes: Note[] = [];
+  private unanchoredNotePaths = new Set<string>();
+  private readonly resolver = new AnchorResolver();
+  private readonly livePositions = new LivePositions();
   private readonly markers: Record<NoteScope, vscode.TextEditorDecorationType>;
 
   constructor(private readonly workspaceRoot: string) {
@@ -41,32 +46,77 @@ export class NoteRenderer implements vscode.HoverProvider {
     this.notes = notes;
   }
 
+  /**
+   * Move tracked notes with the text. Called on every keystroke rather than
+   * debounced — a dropped edit would silently misplace a note.
+   */
+  trackEdit(event: vscode.TextDocumentChangeEvent): void {
+    this.livePositions.applyEdits(
+      event.document.uri.toString(),
+      event.contentChanges.map(toLineEdit),
+    );
+  }
+
+  /** Where a note currently sits in an open document, if it is being tracked. */
+  trackedLine(document: vscode.TextDocument, notePath: string): number | undefined {
+    return this.livePositions.linesFor(document.uri.toString()).get(notePath);
+  }
+
+  forgetDocument(document: vscode.TextDocument): void {
+    this.livePositions.forgetDocument(document.uri.toString());
+  }
+
+  /** After a note is re-attached by hand, every tracked line may be stale. */
+  forgetTrackedPositions(): void {
+    this.livePositions.forgetAll();
+  }
+
+  /**
+   * Notes in the open editors whose anchor could not be resolved. Only files
+   * that are actually open can be checked — the sidebar labels these rather than
+   * pretending to know about every file in the workspace.
+   */
+  getUnanchoredNotePaths(): Set<string> {
+    return this.unanchoredNotePaths;
+  }
+
   /** Repaint markers for the given editors, defaulting to everything visible. */
-  redraw(editors: readonly vscode.TextEditor[] = vscode.window.visibleTextEditors): void {
+  async redraw(
+    editors: readonly vscode.TextEditor[] = vscode.window.visibleTextEditors,
+  ): Promise<void> {
+    const unanchoredNotePaths = new Set<string>();
+
     for (const editor of editors) {
-      const placedNotes = this.placeNotes(editor.document);
+      const { placed, unanchored } = await this.placeNotes(editor.document);
+      for (const notePath of unanchored) unanchoredNotePaths.add(notePath);
 
       for (const scope of ['personal', 'team'] as const) {
-        const decorations: vscode.DecorationOptions[] = placedNotes
-          .filter((placed) => placed.note.scope === scope)
-          .map((placed) => ({
-            range: editor.document.lineAt(placed.line).range,
+        const decorations: vscode.DecorationOptions[] = placed
+          .filter((entry) => entry.note.scope === scope)
+          .map((entry) => ({
+            range: editor.document.lineAt(entry.line).range,
             // Per-note text, so it has to be set on the range rather than the type.
-            renderOptions: { after: { contentText: markerLabel(placed.note) } },
+            renderOptions: { after: { contentText: markerLabel(entry.note) } },
           }));
         editor.setDecorations(this.markers[scope], decorations);
       }
     }
+
+    this.unanchoredNotePaths = unanchoredNotePaths;
   }
 
-  provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
-    const notesOnLine = this.placeNotes(document).filter((placed) => placed.line === position.line);
+  async provideHover(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): Promise<vscode.Hover | undefined> {
+    const { placed } = await this.placeNotes(document);
+    const notesOnLine = placed.filter((entry) => entry.line === position.line);
     if (notesOnLine.length === 0) return undefined;
 
     const markdown = new vscode.MarkdownString(
-      notesOnLine.map((placed) => renderNote(placed.note)).join('\n\n---\n\n'),
+      notesOnLine.map((entry) => renderNote(entry.note)).join('\n\n---\n\n'),
     );
-    // Required for the `command:` link that opens the note for editing.
+    // Required for the `command:` links that open and re-attach the note.
     markdown.isTrusted = true;
 
     return new vscode.Hover(markdown, document.lineAt(position.line).range);
@@ -76,28 +126,55 @@ export class NoteRenderer implements vscode.HoverProvider {
     for (const decoration of Object.values(this.markers)) decoration.dispose();
   }
 
-  /**
-   * ponytail: re-resolves every note in the file on each redraw. Fine for the
-   * handful of notes a file collects; if a file ever holds hundreds, cache per
-   * document version instead.
-   */
-  private placeNotes(document: vscode.TextDocument): PlacedNote[] {
+  private async placeNotes(
+    document: vscode.TextDocument,
+  ): Promise<{ placed: PlacedNote[]; unanchored: string[] }> {
     const relativePath = path.relative(this.workspaceRoot, document.uri.fsPath);
-    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) return [];
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+      return { placed: [], unanchored: [] };
+    }
 
     const fileNotes = notesForFile(this.notes, toPosixPath(relativePath));
-    // Checked before reading the text so hovering in an unannotated file is free.
-    if (fileNotes.length === 0) return [];
+    // Checked before any resolution so hovering in an unannotated file is free.
+    if (fileNotes.length === 0) return { placed: [], unanchored: [] };
 
-    const documentText = document.getText();
+    // Anything already tracked keeps its live line; only notes we have never
+    // placed in this document go through snippet and symbol resolution.
+    const trackedLines = this.livePositions.linesFor(document.uri.toString());
+    const untrackedNotes = fileNotes.filter((note) => !trackedLines.has(note.notePath));
+
+    if (untrackedNotes.length > 0) {
+      const { lines } = await this.resolver.resolveAll(document, untrackedNotes);
+      for (const note of untrackedNotes) trackedLines.set(note.notePath, lines.get(note.notePath));
+    }
+
     const lastLine = Math.max(document.lineCount - 1, 0);
+    const placed: PlacedNote[] = [];
+    const unanchored: string[] = [];
 
-    return fileNotes.flatMap((note) => {
-      const line = resolveNoteLine(note, documentText);
-      if (line === undefined) return [];
-      return [{ note, line: Math.min(line, lastLine) }];
-    });
+    for (const note of fileNotes) {
+      const line = trackedLines.get(note.notePath);
+      if (line === undefined) unanchored.push(note.notePath);
+      else placed.push({ note, line: Math.min(line, lastLine) });
+    }
+
+    return { placed, unanchored };
   }
+}
+
+function toLineEdit(change: vscode.TextDocumentContentChangeEvent): LineEdit {
+  return {
+    startLine: change.range.start.line,
+    startCharacter: change.range.start.character,
+    endLine: change.range.end.line,
+    addedLineCount: countNewlines(change.text),
+  };
+}
+
+function countNewlines(text: string): number {
+  let count = 0;
+  for (const character of text) if (character === '\n') count += 1;
+  return count;
 }
 
 function createMarkerDecoration(colorId: string): vscode.TextEditorDecorationType {
@@ -116,22 +193,23 @@ function createMarkerDecoration(colorId: string): vscode.TextEditorDecorationTyp
 
 /** Enough of the note to recognise it without hovering, short enough to ignore. */
 function markerLabel(note: Note): string {
-  const title = note.title.length > MAX_MARKER_TITLE_LENGTH
-    ? `${note.title.slice(0, MAX_MARKER_TITLE_LENGTH).trimEnd()}…`
-    : note.title;
+  const title =
+    note.title.length > MAX_MARKER_TITLE_LENGTH
+      ? `${note.title.slice(0, MAX_MARKER_TITLE_LENGTH).trimEnd()}…`
+      : note.title;
   return `● ${title}`;
 }
 
 function renderNote(note: Note): string {
   // The body already opens with the title as an H1, so it is rendered as-is
   // rather than repeating the title above it.
-  const openNoteArguments = encodeURIComponent(JSON.stringify([note.notePath]));
+  const commandArguments = encodeURIComponent(JSON.stringify([note.notePath]));
   const scopeLabel = note.scope === 'personal' ? '🟢 Personal' : '🔵 Team';
   const typeLabel = note.type === 'note' ? '' : ` · ${note.type}`;
 
   return [
     note.body || '_Empty note_',
     '',
-    `${scopeLabel}${typeLabel} · [Open note](command:lore.openNote?${openNoteArguments})`,
+    `${scopeLabel}${typeLabel} · [Open note](command:lore.openNote?${commandArguments})`,
   ].join('\n');
 }

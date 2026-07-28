@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import {
   ensureLocalIgnored,
   findSnippetLine,
+  findSymbolLine,
   notesForDirectory,
   notesForFile,
   parseNote,
@@ -144,6 +145,43 @@ test('resolveNoteLine gives up when the snippet is gone, so no pin is drawn', ()
 
 test('resolveNoteLine gives up on a note with neither snippet nor line', () => {
   assert.equal(resolveNoteLine(noteFor('src/a.py'), 'x\ny'), undefined);
+});
+
+const CALCULATOR_OUTLINE = [
+  {
+    name: 'Calculator',
+    line: 0,
+    children: [
+      { name: 'add', line: 1, children: [] },
+      { name: 'divide', line: 10, children: [] },
+    ],
+  },
+  { name: 'main', line: 20, children: [] },
+];
+
+test('findSymbolLine walks a dotted path to the declaration line', () => {
+  assert.equal(findSymbolLine(CALCULATOR_OUTLINE, 'Calculator.divide'), 10);
+  assert.equal(findSymbolLine(CALCULATOR_OUTLINE, 'Calculator'), 0);
+  assert.equal(findSymbolLine(CALCULATOR_OUTLINE, 'main'), 20);
+});
+
+test('findSymbolLine survives a renamed parent when the leaf name is unique', () => {
+  // The note was written against Calculator.divide; the class is now SafeCalculator.
+  const renamed = [{ ...CALCULATOR_OUTLINE[0], name: 'SafeCalculator' }];
+  assert.equal(findSymbolLine(renamed, 'Calculator.divide'), 10);
+});
+
+test('findSymbolLine refuses to guess when the leaf name is ambiguous', () => {
+  const twoDivides = [
+    { name: 'IntCalculator', line: 0, children: [{ name: 'divide', line: 3, children: [] }] },
+    { name: 'FloatCalculator', line: 8, children: [{ name: 'divide', line: 11, children: [] }] },
+  ];
+  assert.equal(findSymbolLine(twoDivides, 'Calculator.divide'), undefined);
+});
+
+test('findSymbolLine returns undefined when the symbol is gone entirely', () => {
+  assert.equal(findSymbolLine(CALCULATOR_OUTLINE, 'Calculator.modulo'), undefined);
+  assert.equal(findSymbolLine([], 'Calculator.divide'), undefined);
 });
 
 test('readAllNotes takes scope from the directory and ignores broken notes', async () => {

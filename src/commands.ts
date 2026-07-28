@@ -106,6 +106,67 @@ export async function revealNote(workspaceRoot: string, note: Note): Promise<voi
   editor.revealRange(targetRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
+/**
+ * Point an existing note at the cursor, rewriting its anchor in place.
+ *
+ * This is the manual escape hatch for a note the resolver gave up on — a
+ * rewritten function, a renamed class, code moved to another file. Anchors are
+ * never rewritten automatically: guessing wrong would silently move a note onto
+ * unrelated code, and for team notes it would churn the file on every save.
+ */
+export async function reattachNote(workspaceRoot: string, note: Note): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showInformationMessage('Lore: put the cursor where the note belongs, then re-attach.');
+    return;
+  }
+
+  const relativePath = path.relative(workspaceRoot, editor.document.uri.fsPath);
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    vscode.window.showInformationMessage('Lore: notes can only be attached to files inside the workspace.');
+    return;
+  }
+
+  const cursorLine = editor.selection.active.line;
+  // targetPath is rewritten too, so a note can follow code that moved file.
+  await writeNote({
+    ...note,
+    targetPath: toPosixPath(relativePath),
+    symbol: await enclosingSymbolName(editor.document.uri, editor.selection.active),
+    line: cursorLine + 1,
+    snippet: editor.document.lineAt(cursorLine).text.trim() || undefined,
+  });
+
+  vscode.window.showInformationMessage(
+    `Lore: "${note.title}" re-attached to ${toPosixPath(relativePath)}:${cursorLine + 1}`,
+  );
+}
+
+/**
+ * Bring a note's stored anchor back in line with the code it is now sitting on.
+ *
+ * Only safe because the caller tracked this note through the edits that moved
+ * it — rewriting a *guessed* position would silently slide notes onto unrelated
+ * code, which is why resolution never writes anything. Returns true when the
+ * note file changed.
+ */
+export async function refreshAnchor(
+  document: vscode.TextDocument,
+  note: Note,
+  line: number,
+): Promise<boolean> {
+  const snippet = document.lineAt(line).text.trim() || undefined;
+  if (snippet === note.snippet && note.line === line + 1) return false;
+
+  await writeNote({
+    ...note,
+    line: line + 1,
+    snippet,
+    symbol: await enclosingSymbolName(document.uri, new vscode.Position(line, 0)),
+  });
+  return true;
+}
+
 /** Open a note's Markdown file, cursor parked at the end of the body. */
 export async function openNote(notePath: string): Promise<void> {
   const document = await vscode.workspace.openTextDocument(vscode.Uri.file(notePath));

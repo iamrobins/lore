@@ -1,5 +1,5 @@
 /**
- * Wiring only: read notes, register the sidebar, gutter rendering and commands,
+ * Wiring only: read notes, register the sidebar, editor rendering and commands,
  * then reload whenever anything under `.lore/` changes on disk.
  *
  * The watcher is what makes notes written by an AI agent appear without a
@@ -7,9 +7,10 @@
  * no cache to invalidate.
  */
 
+import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { createNote, openNote, revealNote } from './commands';
-import { LORE_DIRECTORY, Note, readAllNotes } from './noteStore';
+import { createNote, openNote, reattachNote, refreshAnchor, revealNote } from './commands';
+import { LORE_DIRECTORY, Note, notesForFile, readAllNotes, toPosixPath } from './noteStore';
 import { NoteRenderer } from './noteRenderer';
 import { LoreTreeItem, NoteTreeProvider } from './noteTree';
 
@@ -27,16 +28,40 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const treeProvider = new NoteTreeProvider(workspaceRoot);
   const renderer = new NoteRenderer(workspaceRoot);
+  let currentNotes: Note[] = [];
+
+  // Repainting is what discovers orphans, so the sidebar is told after each pass.
+  const redraw = async (editors?: readonly vscode.TextEditor[]): Promise<void> => {
+    await renderer.redraw(editors);
+    treeProvider.setUnanchoredNotePaths(renderer.getUnanchoredNotePaths());
+  };
 
   const reloadNotes = async (): Promise<void> => {
-    const notes = await readAllNotes(workspaceRoot);
-    treeProvider.setNotes(notes);
-    renderer.setNotes(notes);
-    renderer.redraw();
+    currentNotes = await readAllNotes(workspaceRoot);
+    treeProvider.setNotes(currentNotes);
+    renderer.setNotes(currentNotes);
+    await redraw();
   };
 
   const scheduledReload = debounce(() => void reloadNotes(), RELOAD_DEBOUNCE_MS);
-  const scheduledRedraw = debounce(() => renderer.redraw(), REDRAW_DEBOUNCE_MS);
+  const scheduledRedraw = debounce(() => void redraw(), REDRAW_DEBOUNCE_MS);
+
+  /**
+   * Once the file is saved, write the notes' anchors back to match the code they
+   * are now on. The tracked line is what makes this safe — see refreshAnchor.
+   * The watcher picks the rewritten notes up, so nothing reloads explicitly here.
+   */
+  const refreshAnchorsIn = async (document: vscode.TextDocument): Promise<void> => {
+    if (isInsideLoreDirectory(document.uri.fsPath)) return;
+
+    const relativePath = path.relative(workspaceRoot, document.uri.fsPath);
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) return;
+
+    for (const note of notesForFile(currentNotes, toPosixPath(relativePath))) {
+      const line = renderer.trackedLine(document, note.notePath);
+      if (line !== undefined) await refreshAnchor(document, note, line);
+    }
+  };
 
   const noteWatcher = vscode.workspace.createFileSystemWatcher(`**/${LORE_DIRECTORY}/**/*.md`);
   noteWatcher.onDidCreate(scheduledReload.run);
@@ -54,14 +79,27 @@ export function activate(context: vscode.ExtensionContext): void {
     // The notes on disk have not changed here — only what is on screen.
     vscode.window.onDidChangeActiveTextEditor(() => {
       treeProvider.refreshView();
-      renderer.redraw();
+      void redraw();
     }),
-    vscode.window.onDidChangeVisibleTextEditors((editors) => renderer.redraw(editors)),
-    // Editing above a note moves it, so the pin has to follow the text.
-    vscode.workspace.onDidChangeTextDocument(scheduledRedraw.run),
+    vscode.window.onDidChangeVisibleTextEditors((editors) => void redraw(editors)),
+
+    // Tracking runs on every keystroke; only the repaint is debounced. A dropped
+    // edit would misplace a note, whereas a late repaint just looks slow.
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      renderer.trackEdit(event);
+      scheduledRedraw.run();
+    }),
+    vscode.workspace.onDidSaveTextDocument((document) => void refreshAnchorsIn(document)),
+    vscode.workspace.onDidCloseTextDocument((document) => renderer.forgetDocument(document)),
 
     vscode.commands.registerCommand('lore.new', () => createNote(workspaceRoot)),
     vscode.commands.registerCommand('lore.reveal', (note: Note) => revealNote(workspaceRoot, note)),
+    vscode.commands.registerCommand('lore.reattach', async (item?: LoreTreeItem) => {
+      if (item?.itemType !== 'note') return;
+      await reattachNote(workspaceRoot, item.note);
+      // Every tracked line was based on the old anchor.
+      renderer.forgetTrackedPositions();
+    }),
     vscode.commands.registerCommand('lore.openNote', (target?: LoreTreeItem | string) => {
       const notePath = notePathOf(target);
       return notePath === undefined ? undefined : openNote(notePath);
@@ -73,6 +111,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   // Nothing to tear down: every disposable is registered on context.subscriptions.
+}
+
+/** Note files are not annotation targets, so saving one must not rewrite anchors. */
+function isInsideLoreDirectory(filePath: string): boolean {
+  return toPosixPath(filePath).includes(`/${LORE_DIRECTORY}/`);
 }
 
 /** The sidebar button passes a tree item; the hover link passes a path. */

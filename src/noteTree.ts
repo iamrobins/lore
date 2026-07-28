@@ -19,7 +19,7 @@ import {
 
 const MAX_TOOLTIP_LENGTH = 600;
 
-type GroupKind = 'directory' | 'personal' | 'team' | 'workspace';
+type GroupKind = 'directory' | 'personal' | 'team' | 'workspace' | 'unanchored';
 
 class GroupItem extends vscode.TreeItem {
   readonly itemType = 'group' as const;
@@ -28,10 +28,10 @@ class GroupItem extends vscode.TreeItem {
     label: string,
     readonly groupKind: GroupKind,
     readonly notes: Note[],
-    themeIcon: string,
+    icon: vscode.ThemeIcon,
   ) {
     super(label, vscode.TreeItemCollapsibleState.Expanded);
-    this.iconPath = new vscode.ThemeIcon(themeIcon);
+    this.iconPath = icon;
     this.contextValue = `loreGroup.${groupKind}`;
   }
 }
@@ -39,22 +39,24 @@ class GroupItem extends vscode.TreeItem {
 class NoteItem extends vscode.TreeItem {
   readonly itemType = 'note' as const;
 
-  constructor(readonly note: Note) {
+  constructor(readonly note: Note, isUnanchored = false) {
     super(note.title, vscode.TreeItemCollapsibleState.None);
 
-    this.description = describeLocation(note);
+    this.description = isUnanchored ? 'anchor lost' : describeLocation(note);
     this.tooltip = buildTooltip(note);
-    // Theme colours rather than hex, so green and blue stay legible in every theme.
-    this.iconPath = new vscode.ThemeIcon(
-      'circle-filled',
-      new vscode.ThemeColor(note.scope === 'personal' ? 'charts.green' : 'charts.blue'),
-    );
+    // Theme colours rather than hex, so the icons stay legible in every theme.
+    this.iconPath = isUnanchored
+      ? new vscode.ThemeIcon('circle-outline', new vscode.ThemeColor('list.warningForeground'))
+      : new vscode.ThemeIcon(
+          'circle-filled',
+          new vscode.ThemeColor(note.scope === 'personal' ? 'charts.green' : 'charts.blue'),
+        );
     this.command = {
       command: 'lore.reveal',
       title: 'Go to Code',
       arguments: [note],
     };
-    this.contextValue = `loreNote.${note.scope}`;
+    this.contextValue = isUnanchored ? 'loreNote.unanchored' : `loreNote.${note.scope}`;
   }
 }
 
@@ -65,6 +67,7 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
   readonly onDidChangeTreeData = this.changeEmitter.event;
 
   private notes: Note[] = [];
+  private unanchoredNotePaths = new Set<string>();
   private lastCodeDirectory: string | undefined;
 
   constructor(private readonly workspaceRoot: string) {}
@@ -72,6 +75,17 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
   /** Replace the note set after reading from disk. */
   setNotes(notes: Note[]): void {
     this.notes = notes;
+    this.changeEmitter.fire();
+  }
+
+  /**
+   * Record which notes the renderer could not place. Only fires a change when
+   * the set actually differs — this arrives after every repaint, and rebuilding
+   * the tree on each keystroke would make it flicker.
+   */
+  setUnanchoredNotePaths(notePaths: Set<string>): void {
+    if (haveSameMembers(this.unanchoredNotePaths, notePaths)) return;
+    this.unanchoredNotePaths = notePaths;
     this.changeEmitter.fire();
   }
 
@@ -103,14 +117,24 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
       // Shown even when empty: the label is how you tell which directory the
       // list below is describing.
       groups.push(
-        new GroupItem(directory === '' ? './' : `${directory}/`, 'directory', directoryNotes, 'folder'),
+        new GroupItem(
+          directory === '' ? './' : `${directory}/`,
+          'directory',
+          directoryNotes,
+          new vscode.ThemeIcon('folder'),
+        ),
       );
     }
 
     const folderNotes = workspaceNotes(this.notes);
     if (folderNotes.length > 0) {
       groups.push(
-        new GroupItem(`Workspace (${folderNotes.length})`, 'workspace', folderNotes, 'root-folder'),
+        new GroupItem(
+          `Workspace (${folderNotes.length})`,
+          'workspace',
+          folderNotes,
+          new vscode.ThemeIcon('root-folder'),
+        ),
       );
     }
 
@@ -118,19 +142,49 @@ export class NoteTreeProvider implements vscode.TreeDataProvider<LoreTreeItem> {
   }
 
   private childrenOfGroup(group: GroupItem): LoreTreeItem[] {
+    if (group.groupKind === 'unanchored') {
+      return group.notes.map((note) => new NoteItem(note, true));
+    }
     if (group.groupKind !== 'directory') {
       return group.notes.map((note) => new NoteItem(note));
     }
 
-    const personalNotes = group.notes.filter((note) => note.scope === 'personal');
-    const teamNotes = group.notes.filter((note) => note.scope === 'team');
+    const unanchoredNotes = group.notes.filter((note) => this.unanchoredNotePaths.has(note.notePath));
+    const anchoredNotes = group.notes.filter((note) => !this.unanchoredNotePaths.has(note.notePath));
+
+    const personalNotes = anchoredNotes.filter((note) => note.scope === 'personal');
+    const teamNotes = anchoredNotes.filter((note) => note.scope === 'team');
 
     const groups: LoreTreeItem[] = [];
     if (personalNotes.length > 0) {
-      groups.push(new GroupItem(`My Notes (${personalNotes.length})`, 'personal', personalNotes, 'account'));
+      groups.push(
+        new GroupItem(
+          `My Notes (${personalNotes.length})`,
+          'personal',
+          personalNotes,
+          new vscode.ThemeIcon('account'),
+        ),
+      );
     }
     if (teamNotes.length > 0) {
-      groups.push(new GroupItem(`Team Notes (${teamNotes.length})`, 'team', teamNotes, 'organization'));
+      groups.push(
+        new GroupItem(
+          `Team Notes (${teamNotes.length})`,
+          'team',
+          teamNotes,
+          new vscode.ThemeIcon('organization'),
+        ),
+      );
+    }
+    if (unanchoredNotes.length > 0) {
+      groups.push(
+        new GroupItem(
+          `Unanchored (${unanchoredNotes.length})`,
+          'unanchored',
+          unanchoredNotes,
+          new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground')),
+        ),
+      );
     }
     return groups;
   }
@@ -165,6 +219,12 @@ function activeEditorDirectory(workspaceRoot: string): string | undefined {
 function describeLocation(note: Note): string {
   const fileName = path.basename(note.targetPath);
   return note.line === undefined ? fileName : `${fileName}:${note.line}`;
+}
+
+function haveSameMembers(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const member of left) if (!right.has(member)) return false;
+  return true;
 }
 
 function buildTooltip(note: Note): vscode.MarkdownString {
