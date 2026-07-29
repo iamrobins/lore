@@ -1,6 +1,9 @@
 /**
- * The three things you can do with a note in this milestone: create one, jump to
- * the code it annotates, and open it for editing.
+ * What you can do with a note: create one, jump to the code it annotates, open
+ * it for editing, move it between scopes, and delete it.
+ *
+ * Every note carries its own project root in its path, so these take the note
+ * rather than a workspace root — a workspace can hold several `.lore/` stores.
  */
 
 import * as path from 'node:path';
@@ -11,31 +14,32 @@ import {
   isDirectoryNote,
   listNoteFileNames,
   moveNoteToScope,
+  noteRoot,
   notesDirectory,
   readNote,
   resolveNoteLine,
   toNoteFileName,
   toPosixPath,
+  workspaceRelativePath,
   writeNote,
 } from './noteStore';
 
 /**
- * Create a personal note anchored to the cursor.
+ * Create a personal note anchored to the cursor, in the project the file
+ * belongs to.
  *
  * Personal is the default because `.lore/local/` is gitignored: a half-formed
  * thought cannot reach the repo before you mean it to. Promoting a note to the
  * team is a later, deliberate action.
  */
-export async function createNote(workspaceRoot: string): Promise<void> {
+export async function createNote(root: string | undefined): Promise<void> {
   const editor = vscode.window.activeTextEditor;
-  if (!editor) {
-    vscode.window.showInformationMessage('Lore: open a file to attach a note to it.');
-    return;
-  }
-
-  const relativePath = path.relative(workspaceRoot, editor.document.uri.fsPath);
-  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    vscode.window.showInformationMessage('Lore: notes can only be attached to files inside the workspace.');
+  const relativePath =
+    root === undefined || !editor
+      ? undefined
+      : workspaceRelativePath(root, editor.document.uri.fsPath);
+  if (!editor || root === undefined || relativePath === undefined) {
+    vscode.window.showInformationMessage('Lore: open a file inside the workspace to attach a note to it.');
     return;
   }
 
@@ -46,12 +50,12 @@ export async function createNote(workspaceRoot: string): Promise<void> {
   if (!title?.trim()) return; // dismissed, or nothing typed
 
   const cursorLine = editor.selection.active.line;
-  const directory = notesDirectory(workspaceRoot, 'personal');
+  const directory = notesDirectory(root, 'personal');
   const fileName = toNoteFileName(title, await listNoteFileNames(directory));
 
   const note: Note = {
     notePath: path.join(directory, fileName),
-    targetPath: toPosixPath(relativePath),
+    targetPath: relativePath,
     scope: 'personal',
     title: title.trim(),
     // The title lives as an H1 so the file reads correctly in any Markdown
@@ -65,7 +69,7 @@ export async function createNote(workspaceRoot: string): Promise<void> {
     created: new Date().toISOString().slice(0, 10),
   };
 
-  await ensureLocalIgnored(workspaceRoot);
+  await ensureLocalIgnored(root);
   await writeNote(note);
   await openNote(note.notePath);
 }
@@ -79,7 +83,6 @@ export async function createNote(workspaceRoot: string): Promise<void> {
  * had been deleted while its own marker sat correctly two lines away.
  */
 export async function revealNote(
-  workspaceRoot: string,
   note: Note | undefined,
   trackedLineIn: (document: vscode.TextDocument) => number | undefined = () => undefined,
 ): Promise<void> {
@@ -95,7 +98,7 @@ export async function revealNote(
     return;
   }
 
-  const targetUri = vscode.Uri.file(path.join(workspaceRoot, note.targetPath));
+  const targetUri = vscode.Uri.file(path.join(noteRoot(note), note.targetPath));
   let document: vscode.TextDocument;
   try {
     document = await vscode.workspace.openTextDocument(targetUri);
@@ -133,16 +136,21 @@ export async function revealNote(
  * never rewritten automatically: guessing wrong would silently move a note onto
  * unrelated code, and for team notes it would churn the file on every save.
  */
-export async function reattachNote(workspaceRoot: string, note: Note): Promise<void> {
+export async function reattachNote(note: Note): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     vscode.window.showInformationMessage('Lore: put the cursor where the note belongs, then re-attach.');
     return;
   }
 
-  const relativePath = path.relative(workspaceRoot, editor.document.uri.fsPath);
-  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    vscode.window.showInformationMessage('Lore: notes can only be attached to files inside the workspace.');
+  // A note's target is stored relative to its own project, so it can only point
+  // at files in that project — re-attaching across two `.lore/` stores would
+  // write a path that never resolves again.
+  const relativePath = workspaceRelativePath(noteRoot(note), editor.document.uri.fsPath);
+  if (relativePath === undefined) {
+    vscode.window.showInformationMessage(
+      `Lore: "${note.title}" belongs to ${path.basename(noteRoot(note))}, so it can only be attached to a file in that project.`,
+    );
     return;
   }
 
@@ -150,14 +158,14 @@ export async function reattachNote(workspaceRoot: string, note: Note): Promise<v
   // targetPath is rewritten too, so a note can follow code that moved file.
   await writeNote({
     ...note,
-    targetPath: toPosixPath(relativePath),
+    targetPath: relativePath,
     symbol: await enclosingSymbolName(editor.document.uri, editor.selection.active),
     line: cursorLine + 1,
     snippet: editor.document.lineAt(cursorLine).text.trim() || undefined,
   });
 
   vscode.window.showInformationMessage(
-    `Lore: "${note.title}" re-attached to ${toPosixPath(relativePath)}:${cursorLine + 1}`,
+    `Lore: "${note.title}" re-attached to ${relativePath}:${cursorLine + 1}`,
   );
 }
 
@@ -168,7 +176,7 @@ export async function reattachNote(workspaceRoot: string, note: Note): Promise<v
  * Confirmed first because it is the one action here that is hard to take back:
  * once the note is committed and pushed, it is in everyone's history.
  */
-export async function shareNote(workspaceRoot: string, note: Note): Promise<void> {
+export async function shareNote(note: Note): Promise<void> {
   const confirmation = await vscode.window.showWarningMessage(
     `Share "${note.title}" with the team?`,
     { modal: true, detail: 'It moves into .lore/notes/, which is committed to git.' },
@@ -176,17 +184,45 @@ export async function shareNote(workspaceRoot: string, note: Note): Promise<void
   );
   if (confirmation !== 'Share') return;
 
-  await moveNoteToScope(workspaceRoot, note, 'team');
+  await moveNoteToScope(noteRoot(note), note, 'team');
   vscode.window.showInformationMessage(`Lore: "${note.title}" is now a team note. Commit .lore/notes/ to share it.`);
 }
 
 /** Take a team note back to personal, out of git's reach for future commits. */
-export async function unshareNote(workspaceRoot: string, note: Note): Promise<void> {
-  await ensureLocalIgnored(workspaceRoot);
-  await moveNoteToScope(workspaceRoot, note, 'personal');
+export async function unshareNote(note: Note): Promise<void> {
+  await ensureLocalIgnored(noteRoot(note));
+  await moveNoteToScope(noteRoot(note), note, 'personal');
   vscode.window.showInformationMessage(
     `Lore: "${note.title}" is personal again. Commit the deletion to remove it for others.`,
   );
+}
+
+/**
+ * Delete a note's file.
+ *
+ * Confirmed, and sent to the trash rather than unlinked, because a personal note
+ * is not in git — nothing else would bring it back. Some filesystems have no
+ * trash to move it to, and there a plain delete is the only option left.
+ */
+export async function deleteNote(note: Note): Promise<void> {
+  const confirmation = await vscode.window.showWarningMessage(
+    `Delete "${note.title}"?`,
+    {
+      modal: true,
+      detail: `${toPosixPath(path.relative(noteRoot(note), note.notePath))} is removed${
+        note.scope === 'team' ? '. Commit the deletion to remove it for others.' : '.'
+      }`,
+    },
+    'Delete',
+  );
+  if (confirmation !== 'Delete') return;
+
+  const noteUri = vscode.Uri.file(note.notePath);
+  try {
+    await vscode.workspace.fs.delete(noteUri, { useTrash: true });
+  } catch {
+    await vscode.workspace.fs.delete(noteUri);
+  }
 }
 
 /**

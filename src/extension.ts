@@ -1,6 +1,7 @@
 /**
- * Wiring only: read notes, register the sidebar, editor rendering and commands,
- * then reload whenever anything under `.lore/` changes on disk.
+ * Wiring only: find every Lore project in the workspace, read their notes,
+ * register the sidebar, editor rendering and commands, then reload whenever
+ * anything under a `.lore/` changes on disk.
  *
  * The watcher is what makes notes written by an AI agent appear without a
  * reload — the filesystem is the sync channel, so there is nothing to poll and
@@ -11,6 +12,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
   createNote,
+  deleteNote,
   openNote,
   reattachNote,
   refreshAnchor,
@@ -18,7 +20,14 @@ import {
   shareNote,
   unshareNote,
 } from './commands';
-import { LORE_DIRECTORY, Note, notesForFile, readAllNotes, toPosixPath } from './noteStore';
+import {
+  LORE_DIRECTORY,
+  Note,
+  notesForAbsolutePath,
+  readAllNotes,
+  rootContaining,
+  toPosixPath,
+} from './noteStore';
 import { NoteRenderer } from './noteRenderer';
 import { LoreTreeItem, NoteTreeProvider } from './noteTree';
 
@@ -29,14 +38,14 @@ const RELOAD_DEBOUNCE_MS = 100;
 const REDRAW_DEBOUNCE_MS = 150;
 
 export function activate(context: vscode.ExtensionContext): void {
-  // ponytail: first workspace folder only. Multi-root needs a note store per
-  // folder; add it when someone actually opens Lore in a multi-root workspace.
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!workspaceRoot) return;
-
-  const treeProvider = new NoteTreeProvider(workspaceRoot);
-  const renderer = new NoteRenderer(workspaceRoot);
+  const treeProvider = new NoteTreeProvider();
+  const renderer = new NoteRenderer();
   let currentNotes: Note[] = [];
+  let roots: string[] = [];
+
+  /** The project a file belongs to, for commands that need one before any note exists. */
+  const projectRootFor = (uri: vscode.Uri): string | undefined =>
+    rootContaining(roots, uri.fsPath) ?? vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
 
   // Repainting is what discovers orphans, so the sidebar is told after each pass.
   const redraw = async (editors?: readonly vscode.TextEditor[]): Promise<void> => {
@@ -46,7 +55,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const reloadNotes = async (): Promise<void> => {
     const previousNotes = new Map(currentNotes.map((note) => [note.notePath, note]));
-    currentNotes = await readAllNotes(workspaceRoot);
+    // Re-discovered every time rather than cached: a `.lore/` appears the moment
+    // someone runs `git pull`, clones a package, or writes their first note.
+    roots = await findLoreRoots();
+    currentNotes = (await Promise.all(roots.map((root) => readAllNotes(root)))).flat();
 
     // A tracked line outlives the anchor it came from unless it is dropped here.
     // Without this, hand-editing a note's `line:` had no effect and was then
@@ -59,7 +71,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     for (const deletedNotePath of previousNotes.keys()) renderer.forgetNote(deletedNotePath);
 
-    treeProvider.setNotes(currentNotes);
+    treeProvider.setNotes(currentNotes, roots);
     renderer.setNotes(currentNotes);
     await redraw();
   };
@@ -75,10 +87,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const refreshAnchorsIn = async (document: vscode.TextDocument): Promise<void> => {
     if (isInsideLoreDirectory(document.uri.fsPath)) return;
 
-    const relativePath = path.relative(workspaceRoot, document.uri.fsPath);
-    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) return;
-
-    for (const note of notesForFile(currentNotes, toPosixPath(relativePath))) {
+    for (const note of notesForAbsolutePath(currentNotes, document.uri.fsPath)) {
       const line = renderer.trackedLine(document, note.notePath);
       if (line !== undefined) await refreshAnchor(document, note, line);
     }
@@ -89,8 +98,17 @@ export function activate(context: vscode.ExtensionContext): void {
   noteWatcher.onDidChange(scheduledReload.run);
   noteWatcher.onDidDelete(scheduledReload.run);
 
+  // createTreeView rather than registerTreeDataProvider, for the visibility
+  // event: opening the sidebar is the moment you expect to be looking at what is
+  // on disk right now, and a watcher can miss writes on a network or remote
+  // filesystem — which is exactly where an agent on another machine writes them.
+  const treeView = vscode.window.createTreeView('lore.notes', { treeDataProvider: treeProvider });
+
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('lore.notes', treeProvider),
+    treeView,
+    treeView.onDidChangeVisibility((event) => {
+      if (event.visible) scheduledReload.run();
+    }),
     vscode.languages.registerHoverProvider({ scheme: 'file' }, renderer),
     noteWatcher,
     renderer,
@@ -113,11 +131,24 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidSaveTextDocument((document) => void refreshAnchorsIn(document)),
     vscode.workspace.onDidCloseTextDocument((document) => renderer.forgetDocument(document)),
 
-    vscode.commands.registerCommand('lore.new', reporting(() => createNote(workspaceRoot))),
+    // Adding or removing a folder changes which projects exist.
+    vscode.workspace.onDidChangeWorkspaceFolders(scheduledReload.run),
+
+    vscode.commands.registerCommand(
+      'lore.new',
+      reporting(async () => {
+        const editor = vscode.window.activeTextEditor;
+        await createNote(editor && projectRootFor(editor.document.uri));
+        // The watcher sees the new file too; this is what makes a note appear
+        // even when it landed somewhere the watcher does not reach, and it is
+        // also what discovers a project whose first note has just been written.
+        scheduledReload.run();
+      }),
+    ),
     vscode.commands.registerCommand(
       'lore.reveal',
       reporting((note?: Note) =>
-        revealNote(workspaceRoot, note, (document) =>
+        revealNote(note, (document) =>
           note ? renderer.trackedLine(document, note.notePath) : undefined,
         ),
       ),
@@ -126,9 +157,10 @@ export function activate(context: vscode.ExtensionContext): void {
       'lore.reattach',
       reporting(async (item?: LoreTreeItem) => {
         if (item?.itemType !== 'note') return;
-        await reattachNote(workspaceRoot, item.note);
+        await reattachNote(item.note);
         // Every tracked line was based on the old anchor.
         renderer.forgetTrackedPositions();
+        scheduledReload.run();
       }),
     ),
     vscode.commands.registerCommand(
@@ -144,16 +176,29 @@ export function activate(context: vscode.ExtensionContext): void {
       'lore.share',
       reporting(async (item?: LoreTreeItem) => {
         if (item?.itemType !== 'note') return;
-        await shareNote(workspaceRoot, item.note);
+        await shareNote(item.note);
         renderer.forgetTrackedPositions();
+        scheduledReload.run();
       }),
     ),
     vscode.commands.registerCommand(
       'lore.unshare',
       reporting(async (item?: LoreTreeItem) => {
         if (item?.itemType !== 'note') return;
-        await unshareNote(workspaceRoot, item.note);
+        await unshareNote(item.note);
         renderer.forgetTrackedPositions();
+        scheduledReload.run();
+      }),
+    ),
+    vscode.commands.registerCommand(
+      'lore.delete',
+      reporting(async (item?: LoreTreeItem) => {
+        if (item?.itemType !== 'note') return;
+        await deleteNote(item.note);
+        renderer.forgetNote(item.note.notePath);
+        // The watcher will notice too, but a deleted note should leave the
+        // sidebar the moment you confirm, not whenever the filesystem says so.
+        scheduledReload.run();
       }),
     ),
   );
@@ -163,6 +208,29 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   // Nothing to tear down: every disposable is registered on context.subscriptions.
+}
+
+/**
+ * Every Lore project in the workspace: the directory above each `.lore/` that
+ * holds notes, at any depth. A monorepo keeps one per package and a multi-root
+ * workspace one per repository, and both were invisible when only the first
+ * workspace folder was read.
+ *
+ * Found from the note files rather than by walking directories ourselves, so
+ * the search runs in VS Code's indexer. The exclude is given explicitly: left
+ * to the default, a user who hides `.lore` from their explorer would silently
+ * lose every note in the sidebar.
+ */
+async function findLoreRoots(): Promise<string[]> {
+  const noteFiles = await vscode.workspace.findFiles(
+    `**/${LORE_DIRECTORY}/{local,notes}/*.md`,
+    '**/node_modules/**',
+  );
+
+  const roots = new Set(
+    noteFiles.map((file) => path.resolve(path.dirname(file.fsPath), '..', '..')),
+  );
+  return [...roots].sort();
 }
 
 /** Note files are not annotation targets, so saving one must not rewrite anchors. */

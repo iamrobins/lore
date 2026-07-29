@@ -120,7 +120,7 @@ you need.
 |---|---|
 | `Alt+N` — macOS `⌘⌥N` | New note on the line under the cursor |
 | Sidebar **+** | Same thing |
-| Right-click a note | Open, re-attach, share with team, make personal |
+| Right-click a note | Open, re-attach, share with team, make personal, delete |
 
 macOS differs because `⌥N` is a dead key there — it composes `ñ` rather than
 reaching the editor.
@@ -130,9 +130,13 @@ reaching the editor.
 Early but working and dogfooded. The format is stable; the extension is one
 implementation of it.
 
-Not built yet: note search, resolving notes, threaded replies, and multi-root
-workspaces. These are deliberate omissions rather than oversights — see the
-issues, and say if you want one.
+Every `.lore/` in the workspace is picked up, at any depth — a monorepo with one
+per package, or a multi-root workspace with one per repository. With more than
+one, the sidebar groups notes under the project they belong to.
+
+Not built yet: note search, resolving notes, and threaded replies. These are
+deliberate omissions rather than oversights — see the issues, and say if you
+want one.
 
 ## Licence
 

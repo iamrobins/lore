@@ -10,12 +10,14 @@ import {
   findSymbolLine,
   isDirectoryNote,
   moveNoteToScope,
+  noteRoot,
   notesApplyingTo,
+  notesForAbsolutePath,
   notesForDirectory,
-  notesForFile,
   parseNote,
   readAllNotes,
   resolveNoteLine,
+  rootContaining,
   searchNotes,
   serializeNote,
   toNoteFileName,
@@ -170,14 +172,46 @@ test('notesForDirectory matches only the files directly in that directory', () =
   );
 });
 
-test('notesForFile matches one file and never folder notes', () => {
+test('notesForAbsolutePath matches one file and never folder notes', () => {
+  const root = path.join(path.sep, 'repo');
   const notes = [noteFor('src/payment/service.py'), noteFor('src/payment/'), noteFor('src/auth/login.py')];
 
   assert.deepEqual(
-    notesForFile(notes, 'src/payment/service.py').map((note) => note.targetPath),
+    notesForAbsolutePath(notes, path.join(root, 'src', 'payment', 'service.py')).map(
+      (note) => note.targetPath,
+    ),
     ['src/payment/service.py'],
   );
-  assert.deepEqual(notesForFile(notes, 'src/payment'), []);
+  assert.deepEqual(notesForAbsolutePath(notes, path.join(root, 'src', 'payment')), []);
+});
+
+test('notesForAbsolutePath keeps two projects with the same file name apart', () => {
+  // Why this matches on the absolute path: a workspace holding two repositories
+  // that both have a src/index.ts would otherwise paint each one's notes onto
+  // the other's file.
+  const apiRoot = path.join(path.sep, 'work', 'api');
+  const webRoot = path.join(path.sep, 'work', 'web');
+  const notes = [
+    { ...noteFor('src/index.ts', apiRoot), title: 'api' },
+    { ...noteFor('src/index.ts', webRoot), title: 'web' },
+  ];
+
+  assert.deepEqual(
+    notesForAbsolutePath(notes, path.join(webRoot, 'src', 'index.ts')).map((note) => note.title),
+    ['web'],
+  );
+});
+
+test('a note knows its own project, and the deepest project owns a file', () => {
+  const monorepo = path.join(path.sep, 'work', 'monorepo');
+  const packageRoot = path.join(monorepo, 'packages', 'api');
+
+  assert.equal(noteRoot(noteFor('src/a.ts', packageRoot)), path.resolve(packageRoot));
+
+  // The package has its own .lore/, so it owns its files — not the monorepo.
+  assert.equal(rootContaining([monorepo, packageRoot], path.join(packageRoot, 'src', 'a.ts')), packageRoot);
+  assert.equal(rootContaining([monorepo, packageRoot], path.join(monorepo, 'tools', 'b.ts')), monorepo);
+  assert.equal(rootContaining([monorepo, packageRoot], path.join(path.sep, 'elsewhere', 'c.ts')), undefined);
 });
 
 test('notesApplyingTo gathers repo, folder and file notes, broadest first', () => {
@@ -466,9 +500,9 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-function noteFor(targetPath: string): Note {
+function noteFor(targetPath: string, root = path.join(path.sep, 'repo')): Note {
   return {
-    notePath: `/repo/.lore/local/${targetPath.replace(/[^a-z0-9]/gi, '-')}.md`,
+    notePath: path.join(root, '.lore', 'local', `${targetPath.replace(/[^a-z0-9]/gi, '-')}.md`),
     targetPath,
     scope: 'personal',
     title: targetPath,

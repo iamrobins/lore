@@ -102,6 +102,37 @@ export function toPosixPath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
 }
 
+/** Whether two paths point at the same place. Case-insensitive on Windows, as the filesystem is. */
+export function isSamePath(left: string, right: string): boolean {
+  return path.relative(left, right) === '';
+}
+
+/**
+ * The project a note belongs to: the directory holding its `.lore/`.
+ *
+ * Derived from the note's own path rather than stored in it, so a workspace can
+ * contain any number of Lore projects — a monorepo package each, or one per
+ * folder of a multi-root workspace — without the format knowing about it.
+ */
+export function noteRoot(note: Note): string {
+  return path.resolve(path.dirname(note.notePath), '..', '..');
+}
+
+/** Absolute path of the code a note annotates. */
+export function noteTargetPath(note: Note): string {
+  return path.resolve(noteRoot(note), note.targetPath);
+}
+
+/**
+ * The project a path belongs to, deepest match first: a package with its own
+ * `.lore/` owns its files, not the monorepo it sits in.
+ */
+export function rootContaining(roots: string[], filePath: string): string | undefined {
+  return roots
+    .filter((root) => workspaceRelativePath(root, filePath) !== undefined)
+    .sort((left, right) => right.length - left.length)[0];
+}
+
 // --------------------------------------------------------------------------
 // Parsing and serializing
 // --------------------------------------------------------------------------
@@ -315,10 +346,17 @@ export function notesForDirectory(notes: Note[], directoryPath: string): Note[] 
   });
 }
 
-/** Notes attached to one specific file (workspace-relative path). */
-export function notesForFile(notes: Note[], targetPath: string): Note[] {
-  const target = toPosixPath(targetPath);
-  return notes.filter((note) => !isDirectoryNote(note) && note.targetPath === target);
+/**
+ * Notes attached to one specific file, matched on its absolute path.
+ *
+ * Absolute rather than relative because a workspace holds several projects and
+ * two of them routinely both have a `src/index.ts` — matching on the relative
+ * path would paint one project's notes onto the other project's file.
+ */
+export function notesForAbsolutePath(notes: Note[], filePath: string): Note[] {
+  return notes.filter(
+    (note) => !isDirectoryNote(note) && isSamePath(noteTargetPath(note), filePath),
+  );
 }
 
 /** Folder- and repo-scoped notes, which belong in their own sidebar group. */

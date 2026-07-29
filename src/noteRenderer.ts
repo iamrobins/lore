@@ -14,11 +14,10 @@
  * you type above them.
  */
 
-import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { AnchorResolver } from './anchorResolver';
 import { LineEdit, LivePositions } from './livePositions';
-import { Note, NoteScope, notesForFile, toPosixPath } from './noteStore';
+import { Note, NoteScope, notesForAbsolutePath } from './noteStore';
 
 const MAX_MARKER_TITLE_LENGTH = 60;
 
@@ -35,7 +34,7 @@ export class NoteRenderer implements vscode.HoverProvider {
   private readonly livePositions = new LivePositions();
   private readonly markers: Record<NoteScope, vscode.TextEditorDecorationType>;
 
-  constructor(private readonly workspaceRoot: string) {
+  constructor() {
     this.markers = {
       personal: createMarkerDecoration('charts.green'),
       team: createMarkerDecoration('charts.blue'),
@@ -136,12 +135,9 @@ export class NoteRenderer implements vscode.HoverProvider {
   private async placeNotes(
     document: vscode.TextDocument,
   ): Promise<{ placed: PlacedNote[]; unanchored: string[] }> {
-    const relativePath = path.relative(this.workspaceRoot, document.uri.fsPath);
-    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-      return { placed: [], unanchored: [] };
-    }
-
-    const fileNotes = notesForFile(this.notes, toPosixPath(relativePath));
+    // Matched on the absolute path, so a note belongs to the project it was
+    // written in even when two projects in this workspace share a file name.
+    const fileNotes = notesForAbsolutePath(this.notes, document.uri.fsPath);
     // Checked before any resolution so hovering in an unannotated file is free.
     if (fileNotes.length === 0) return { placed: [], unanchored: [] };
 

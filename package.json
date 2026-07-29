@@ -2,7 +2,7 @@
   "name": "lore",
   "displayName": "Lore — sticky notes & AI context for your code",
   "description": "Notes that live beside your code instead of inside it. Stored as Markdown in git, readable by AI coding agents.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "license": "MIT",
   "publisher": "iamrobins",
   "icon": "media/icon.png",
@@ -30,7 +30,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "workspaceContains:.lore"
+    "workspaceContains:.lore",
+    "workspaceContains:**/.lore/**/*.md"
   ],
   "contributes": {
     "viewsContainers": {
@@ -88,6 +89,12 @@
         "command": "lore.unshare",
         "title": "Make Personal",
         "category": "Lore"
+      },
+      {
+        "command": "lore.delete",
+        "title": "Delete Note",
+        "category": "Lore",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -118,6 +125,11 @@
           "command": "lore.unshare",
           "when": "view == lore.notes && viewItem =~ /^loreNote\\.team/",
           "group": "2_scope"
+        },
+        {
+          "command": "lore.delete",
+          "when": "view == lore.notes && viewItem =~ /^loreNote/",
+          "group": "9_destructive"
         }
       ],
       "commandPalette": [
@@ -139,6 +151,10 @@
         },
         {
           "command": "lore.unshare",
+          "when": "false"
+        },
+        {
+          "command": "lore.delete",
           "when": "false"
         }
       ]
